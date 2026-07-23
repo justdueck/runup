@@ -114,6 +114,8 @@ const DEFAULTS = {
 
 /** Poll interval while waiting for the page to hand over parsed payloads. */
 const CAPTURE_POLL_MS = 120;
+/** Once a response is known to be tiny, this long without a capture means an empty day. */
+const EMPTY_DAY_PARSE_GRACE_MS = 700;
 /** Small pause after a day step so we never hammer the calendar controls. */
 const STEP_SETTLE_MS = 200;
 
@@ -536,9 +538,24 @@ export class PortalSession implements SchedulerSession {
    * "parse boundary changed" error (we never guess).
    */
   private async settleCaptures(seen: ScheduleResponseSeen): Promise<void> {
-    if (await this.pollCaptures(() => this.dayCache.has(seen.date), seen.date)) return;
-    const bodyLength = await seen.bodyLength;
-    if (bodyLength >= 0 && bodyLength <= EMPTY_SCHEDULE_BODY_MAX_BYTES) {
+    // Track the body size in the background: a tiny response with no capture
+    // after a short parse grace is an empty day, so we do not have to sit out
+    // the full capture grace for quiet days.
+    let bodyLength: number | null = null;
+    void seen.bodyLength.then(
+      (length) => (bodyLength = length),
+      () => (bodyLength = -1),
+    );
+    const started = Date.now();
+    const looksEmpty = (): boolean =>
+      bodyLength !== null &&
+      bodyLength >= 0 &&
+      bodyLength <= EMPTY_SCHEDULE_BODY_MAX_BYTES &&
+      Date.now() - started >= EMPTY_DAY_PARSE_GRACE_MS;
+    await this.pollCaptures(() => this.dayCache.has(seen.date) || looksEmpty(), seen.date);
+    if (this.dayCache.has(seen.date)) return;
+    const finalLength: number = bodyLength ?? (await seen.bodyLength);
+    if (finalLength >= 0 && finalLength <= EMPTY_SCHEDULE_BODY_MAX_BYTES) {
       this.dayCache.set(seen.date, { records: [], at: Date.now() });
       return;
     }
