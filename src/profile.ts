@@ -4,16 +4,23 @@
  * Persists a single JSON document at:
  *   ${RUNUP_HOME:-~/.runup}/profile.json
  *
- * The profile deliberately contains NO secrets. Scheduler/flight-school
- * credentials must never be written here — see the TODO stub at the bottom
- * of this file for the intended OS-keychain approach.
+ * Scheduler/flight-school credentials must never be written here — see the
+ * TODO stub at the bottom of this file for the intended OS-keychain approach.
+ * The one sensitive value the profile MAY hold is `calendar.icalUrls`
+ * (private iCal feed URLs, a fallback for the RUNUP_ICAL_URLS env var); it
+ * is redacted from every tool result via {@link redactProfile}, and this file
+ * lives outside the repo (${RUNUP_HOME:-~/.runup}) and is gitignored.
  */
 import { promises as fs } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { z } from "zod";
+import { isValidTimeZone } from "./tz.js";
 
 export const PROFILE_SCHEMA_VERSION = 1 as const;
+
+/** Default IANA zone for the sample pilot (Puget Sound). */
+export const DEFAULT_TIME_ZONE = "America/Los_Angeles";
 
 /** ICAO / FAA identifier, e.g. "KPAE" or "S43" (normalized to uppercase). */
 export const AirportIdSchema = z
@@ -70,14 +77,58 @@ export const CurrencyGoalsSchema = z.object({
 });
 export type CurrencyGoals = z.infer<typeof CurrencyGoalsSchema>;
 
-export const PreferencesSchema = z.object({
-  /** e.g. "local practice", "cross-country", "food run". */
-  typicalFlightKinds: z.array(z.string().trim().min(1)),
-  /** Round-trip planning cap in nautical miles. */
-  maxDistanceNm: z.number().positive(),
-  budgetPerFlightUsd: z.number().positive(),
-});
+/** IANA time zone name, e.g. "America/Los_Angeles" (must be known to this runtime). */
+export const TimeZoneSchema = z
+  .string()
+  .trim()
+  .min(1)
+  .refine((tz) => isValidTimeZone(tz), { message: 'expected an IANA time zone such as "America/Los_Angeles"' });
+
+/** Local wall-clock time "HH:MM" (24 h). */
+export const LocalTimeSchema = z
+  .string()
+  .trim()
+  .regex(/^([01]\d|2[0-3]):[0-5]\d$/, { message: 'expected a 24-hour "HH:MM" time such as "07:00"' });
+
+export const PreferencesSchema = z
+  .object({
+    /** e.g. "local practice", "cross-country", "food run". */
+    typicalFlightKinds: z.array(z.string().trim().min(1)),
+    /** Round-trip planning cap in nautical miles. */
+    maxDistanceNm: z.number().positive(),
+    budgetPerFlightUsd: z.number().positive(),
+    /** The pilot's home IANA time zone; calendar days / flyable hours are interpreted here. */
+    timezone: TimeZoneSchema.default(DEFAULT_TIME_ZONE),
+    /** Earliest local time a free window may start (flyable hours). */
+    earliestLocalTime: LocalTimeSchema.default("07:00"),
+    /** Latest local time a free window may end (flyable hours). */
+    latestLocalTime: LocalTimeSchema.default("21:00"),
+  })
+  .refine((p) => p.earliestLocalTime < p.latestLocalTime, {
+    message: "earliestLocalTime must be before latestLocalTime",
+    path: ["latestLocalTime"],
+  });
 export type Preferences = z.infer<typeof PreferencesSchema>;
+
+/**
+ * iCal / ICS calendar source. `icalUrls` are BEARER SECRETS (a Google
+ * Calendar "secret address in iCal format" grants read access to anyone who
+ * has it): prefer the RUNUP_ICAL_URLS environment variable; the values here
+ * are the fallback and are always redacted in tool output.
+ */
+export const CalendarConfigSchema = z.object({
+  /** Private iCal (ICS) feed URLs. Never echoed back by any tool (see {@link redactProfile}). */
+  icalUrls: z.array(z.string().trim().min(1)).default([]),
+  /** Whether all-day calendar events block the day (default: they don't). */
+  allDayEventsBlock: z.boolean().default(false),
+  /** Minutes to keep clear before each event. */
+  bufferBeforeMinutes: z.number().nonnegative().default(60),
+  /** Minutes to keep clear after each event. */
+  bufferAfterMinutes: z.number().nonnegative().default(30),
+  /** Free windows shorter than this many hours are dropped (default). */
+  minDurationHours: z.number().positive().default(2.5),
+});
+export type CalendarConfig = z.infer<typeof CalendarConfigSchema>;
 
 export const ProfileSchema = z.object({
   schemaVersion: z.literal(PROFILE_SCHEMA_VERSION),
@@ -86,14 +137,17 @@ export const ProfileSchema = z.object({
   minimums: PersonalMinimumsSchema,
   currencyGoals: CurrencyGoalsSchema,
   preferences: PreferencesSchema,
+  // Defaulted so profile.json files written before the calendar leg still validate.
+  calendar: CalendarConfigSchema.default(() => defaultCalendarConfig()),
 });
 export type Profile = z.infer<typeof ProfileSchema>;
 
 /**
  * Patch shape accepted by `update_profile`: every section optional, minimums
  * blocks individually partial. `schemaVersion` is intentionally not patchable.
- * Arrays (`homeAirports`, `aircraft`), when present, replace the whole list
- * (simplest predictable rule).
+ * Arrays (`homeAirports`, `aircraft`, `calendar.icalUrls`), when present,
+ * replace the whole list (simplest predictable rule). Patch fields never
+ * carry defaults, so an omitted field always means "leave unchanged".
  */
 export const ProfilePatchSchema = z
   .object({
@@ -106,10 +160,45 @@ export const ProfilePatchSchema = z
       })
       .optional(),
     currencyGoals: CurrencyGoalsSchema.partial().optional(),
-    preferences: PreferencesSchema.partial().optional(),
+    preferences: z
+      .object({
+        typicalFlightKinds: z.array(z.string().trim().min(1)).optional(),
+        maxDistanceNm: z.number().positive().optional(),
+        budgetPerFlightUsd: z.number().positive().optional(),
+        timezone: TimeZoneSchema.optional(),
+        earliestLocalTime: LocalTimeSchema.optional(),
+        latestLocalTime: LocalTimeSchema.optional(),
+      })
+      .optional(),
+    calendar: z
+      .object({
+        icalUrls: z
+          .array(z.string().trim().min(1))
+          .optional()
+          .describe(
+            "Private iCal (ICS) feed URLs (bearer secrets - prefer the RUNUP_ICAL_URLS env var). " +
+              "Replaces the whole list; redacted placeholders are ignored.",
+          ),
+        allDayEventsBlock: z.boolean().optional(),
+        bufferBeforeMinutes: z.number().nonnegative().optional(),
+        bufferAfterMinutes: z.number().nonnegative().optional(),
+        minDurationHours: z.number().positive().optional(),
+      })
+      .optional(),
   })
   .strict();
 export type ProfilePatch = z.infer<typeof ProfilePatchSchema>;
+
+/** Default calendar block: no feed configured, sensible buffers around events. */
+export function defaultCalendarConfig(): CalendarConfig {
+  return {
+    icalUrls: [],
+    allDayEventsBlock: false,
+    bufferBeforeMinutes: 60,
+    bufferAfterMinutes: 30,
+    minDurationHours: 2.5,
+  };
+}
 
 /** Sensible starter values; placeholders the pilot should personalize. */
 export function defaultProfile(): Profile {
@@ -133,8 +222,45 @@ export function defaultProfile(): Profile {
       typicalFlightKinds: ["local practice", "cross-country", "food run"],
       maxDistanceNm: 250,
       budgetPerFlightUsd: 300,
+      timezone: DEFAULT_TIME_ZONE,
+      earliestLocalTime: "07:00",
+      latestLocalTime: "21:00",
     },
+    calendar: defaultCalendarConfig(),
   };
+}
+
+// --- Secret handling: iCal URLs are redacted from every tool result -------------
+
+/** Placeholder shown wherever a configured iCal URL would otherwise appear. */
+export const REDACTED_ICAL_URL = "***configured***";
+
+/**
+ * Copy of the profile safe to return from tools / render in the UI: every
+ * configured iCal URL is replaced by {@link REDACTED_ICAL_URL} (the count
+ * survives, the secret does not).
+ */
+export function redactProfile(profile: Profile): Profile {
+  const clone = structuredClone(profile);
+  clone.calendar.icalUrls = clone.calendar.icalUrls.map(() => REDACTED_ICAL_URL);
+  return clone;
+}
+
+/**
+ * Drop redacted placeholders from a patch's `calendar.icalUrls` so a client
+ * that round-trips the (redacted) profile can never overwrite the stored
+ * secrets with placeholders. If only placeholders were sent, the whole key
+ * is removed (meaning "leave the configured URLs unchanged"); an explicit
+ * empty array still clears them.
+ */
+export function stripRedactedIcalUrls(patch: ProfilePatch): ProfilePatch {
+  const urls = patch.calendar?.icalUrls;
+  if (!urls || urls.length === 0) return patch;
+  const real = urls.filter((u) => u.trim() !== REDACTED_ICAL_URL);
+  const next: ProfilePatch = structuredClone(patch);
+  if (real.length === 0) delete next.calendar!.icalUrls;
+  else next.calendar!.icalUrls = real;
+  return next;
 }
 
 export class ProfileValidationError extends Error {

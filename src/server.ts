@@ -18,14 +18,26 @@ import {
   patchProfile,
   profilePath as defaultProfilePath,
   ProfilePatchSchema,
+  redactProfile,
+  stripRedactedIcalUrls,
+  type Profile,
 } from "./profile.js";
 import { AviationWeatherClient, summarizeMetar, summarizeTaf } from "./weather.js";
+import type { HttpTextFetcher } from "./http.js";
 import { scoreConditions } from "./scoring.js";
-import { dateSpan, planDay, resolveAircraftPerformance } from "./planning.js";
+import { dateSpanInZone, planDay, resolveAircraftPerformance } from "./planning.js";
+import { tagWindowsWithDaylight } from "./daylight.js";
 import { FixtureCalendarProvider } from "./providers/calendar.js";
 import { FixtureAvailabilityProvider } from "./providers/availability.js";
+import {
+  calendarSettingsFromProfile,
+  IcalCalendarProvider,
+  ICAL_URLS_ENV,
+  resolveIcalUrls,
+  scrubIcalUrls,
+} from "./providers/ical-calendar.js";
 import { NaiveRoutePlanner } from "./providers/routes.js";
-import type { Providers } from "./providers/types.js";
+import type { CalendarProvider, Providers } from "./providers/types.js";
 import { makeWindow, type TimeWindow } from "./types.js";
 
 export const SERVER_NAME = "runup";
@@ -76,6 +88,10 @@ export interface ServerDeps {
   weather?: AviationWeatherClient;
   /** Loader for the built profile-form HTML (defaults to dist/ui/profile-form.html). */
   loadUiHtml?: () => Promise<string>;
+  /** Fetcher used to download the private iCal (ICS) feeds; injectable so tests never touch the network. */
+  icsFetcher?: HttpTextFetcher;
+  /** Environment for calendar config (RUNUP_ICAL_URLS); defaults to process.env. */
+  env?: NodeJS.ProcessEnv;
 }
 
 export function defaultProviders(): Providers {
@@ -86,11 +102,54 @@ export function defaultProviders(): Providers {
   };
 }
 
+/** Which calendar provider serves a request, plus the notes that explain it in the output. */
+interface CalendarSelection {
+  provider: CalendarProvider;
+  /** Configured feed URLs (secret) - used only to scrub error text, never echoed. */
+  icalUrls: string[];
+  notes: string[];
+}
+
 export function createServer(deps: ServerDeps = {}): McpServer {
   const profileFile = deps.profilePath ?? defaultProfilePath();
   const providers = deps.providers ?? defaultProviders();
   const weather = deps.weather ?? new AviationWeatherClient();
   const loadUiHtml = deps.loadUiHtml ?? defaultUiHtmlLoader;
+  const env = deps.env ?? process.env;
+  const icsFetcher = deps.icsFetcher;
+
+  /**
+   * Pick the calendar source for this request: the iCal provider when at
+   * least one feed URL is configured (RUNUP_ICAL_URLS, else the profile),
+   * otherwise the fixture provider with a note explaining how to configure it.
+   */
+  const selectCalendar = (profile: Profile): CalendarSelection => {
+    const { urls, source } = resolveIcalUrls(env, profile);
+    if (urls.length === 0) {
+      return {
+        provider: providers.calendar,
+        icalUrls: [],
+        notes: [
+          `No calendar is configured (${ICAL_URLS_ENV} is unset and the profile has no calendar.icalUrls); ` +
+            `these are canned fixture windows from ${providers.calendar.name}.`,
+          `To use your real calendar, set ${ICAL_URLS_ENV} to your Google Calendar "secret address in iCal ` +
+            `format" in the MCP server's env block (see the README).`,
+        ],
+      };
+    }
+    const settings = calendarSettingsFromProfile(profile);
+    return {
+      provider: new IcalCalendarProvider(urls, settings, icsFetcher),
+      icalUrls: urls,
+      notes: [
+        `Calendar: ${urls.length} private iCal feed(s) from ${source === "env" ? ICAL_URLS_ENV : "the profile"} ` +
+          `(URLs redacted). Flyable hours ${settings.earliestLocalTime}-${settings.latestLocalTime} ` +
+          `${settings.timeZone}; buffers ${settings.bufferBeforeMinutes} min before / ` +
+          `${settings.bufferAfterMinutes} min after each event; all-day events ` +
+          `${settings.allDayEventsBlock ? "block the day" : "do not block"}.`,
+      ],
+    };
+  };
 
   const server = new McpServer({ name: SERVER_NAME, version: SERVER_VERSION });
 
@@ -103,12 +162,12 @@ export function createServer(deps: ServerDeps = {}): McpServer {
       title: "Get pilot profile",
       description:
         "Return the persisted pilot profile: home airports (ICAO ids, primary first), aircraft, personal " +
-        "minimums (day/night), currency goals, and preferences. Renders an editable profile & minimums form " +
-        "in MCP Apps hosts.",
+        "minimums (day/night), currency goals, preferences (time zone, flyable hours), and calendar settings. " +
+        "Private iCal feed URLs are always redacted. Renders an editable profile & minimums form in MCP Apps hosts.",
       inputSchema: {},
       _meta: { ui: { resourceUri: PROFILE_UI_URI } },
     },
-    async (): Promise<CallToolResult> => jsonResult(await loadProfile(profileFile)),
+    async (): Promise<CallToolResult> => jsonResult(redactProfile(await loadProfile(profileFile))),
   );
 
   registerAppTool(
@@ -118,12 +177,14 @@ export function createServer(deps: ServerDeps = {}): McpServer {
       title: "Update pilot profile",
       description:
         "Apply a partial update (deep merge) to the pilot profile and persist it. Nested objects merge; " +
-        "arrays such as `homeAirports` and `aircraft` are replaced wholesale. Returns the full updated " +
-        "profile. Never put credentials here.",
+        "arrays such as `homeAirports`, `aircraft`, and `calendar.icalUrls` are replaced wholesale. Returns " +
+        "the full updated profile with iCal feed URLs redacted (redacted placeholders sent back are ignored). " +
+        "Never put credentials here; prefer the RUNUP_ICAL_URLS env var for the calendar feed.",
       inputSchema: { patch: ProfilePatchSchema.describe("Partial profile: only the fields to change.") },
       _meta: { ui: { resourceUri: PROFILE_UI_URI } },
     },
-    async ({ patch }): Promise<CallToolResult> => jsonResult(await patchProfile(patch, profileFile)),
+    async ({ patch }): Promise<CallToolResult> =>
+      jsonResult(redactProfile(await patchProfile(stripRedactedIcalUrls(patch), profileFile))),
   );
 
   registerAppResource(
@@ -146,21 +207,45 @@ export function createServer(deps: ServerDeps = {}): McpServer {
     {
       title: "Get free calendar windows",
       description:
-        "List free time windows in the pilot's calendar for a date range (currently a fixture provider - " +
-        "canned data until the calendar source is chosen).",
+        "List free time windows for a date range from the pilot's private iCal (ICS) calendar feed " +
+        "(busy events expanded incl. recurring, buffered before/after, then subtracted from the profile's " +
+        "flyable hours in the profile time zone). Each window is tagged day / night / mixed with sunrise, " +
+        "sunset and civil twilight at every home airport. Falls back to canned fixture windows (with a note) " +
+        "when no calendar feed is configured.",
       inputSchema: {
-        startDate: z.string().describe("Range start, YYYY-MM-DD (local)."),
+        startDate: z.string().describe("Range start, YYYY-MM-DD (profile time zone)."),
         endDate: z.string().optional().describe("Range end (inclusive day), YYYY-MM-DD. Defaults to startDate."),
-        minDurationHours: z.number().positive().optional().describe("Drop windows shorter than this many hours."),
+        minDurationHours: z
+          .number()
+          .positive()
+          .optional()
+          .describe("Drop windows shorter than this many hours (default: profile calendar.minDurationHours)."),
       },
     },
     async ({ startDate, endDate, minDurationHours }): Promise<CallToolResult> => {
-      const range = dateSpan(startDate, endDate ?? startDate);
-      const windows = await providers.calendar.getFreeWindows(
-        range,
-        minDurationHours !== undefined ? { minDurationHours } : {},
-      );
-      return jsonResult({ source: providers.calendar.name, range, windows });
+      const profile = await loadProfile(profileFile);
+      const { provider, icalUrls, notes } = selectCalendar(profile);
+      try {
+        const range = dateSpanInZone(startDate, endDate ?? startDate, profile.preferences.timezone);
+        const windows = await provider.getFreeWindows(
+          range,
+          minDurationHours !== undefined ? { minDurationHours } : {},
+        );
+        const tagged = tagWindowsWithDaylight(windows, profile.homeAirports, profile.preferences.timezone);
+        return jsonResult({
+          source: provider.name,
+          timezone: profile.preferences.timezone,
+          range,
+          windows: tagged,
+          notes: [
+            ...notes,
+            "Windows are tagged day / night / mixed from sunrise-sunset and civil twilight at your home " +
+              "airports (informational only - nothing is filtered by daylight).",
+          ],
+        });
+      } catch (err) {
+        return errorResult(scrubIcalUrls(`get_free_windows failed: ${(err as Error).message}`, icalUrls));
+      }
     },
   );
 
@@ -289,16 +374,22 @@ export function createServer(deps: ServerDeps = {}): McpServer {
     },
     async ({ date, timeOfDay, runwayHeadingDeg, minWindowHours }): Promise<CallToolResult> => {
       const profile = await loadProfile(profileFile);
-      const plan = await planDay(
-        {
-          date,
-          ...(timeOfDay ? { timeOfDay } : {}),
-          ...(runwayHeadingDeg !== undefined ? { runwayHeadingDeg } : {}),
-          ...(minWindowHours !== undefined ? { minWindowHours } : {}),
-        },
-        { profile, providers, weather },
-      );
-      return jsonResult(plan);
+      const calendar = selectCalendar(profile);
+      try {
+        const plan = await planDay(
+          {
+            date,
+            ...(timeOfDay ? { timeOfDay } : {}),
+            ...(runwayHeadingDeg !== undefined ? { runwayHeadingDeg } : {}),
+            ...(minWindowHours !== undefined ? { minWindowHours } : {}),
+            notes: calendar.notes,
+          },
+          { profile, providers: { ...providers, calendar: calendar.provider }, weather },
+        );
+        return jsonResult(plan);
+      } catch (err) {
+        return errorResult(scrubIcalUrls(`plan_day failed: ${(err as Error).message}`, calendar.icalUrls));
+      }
     },
   );
 
