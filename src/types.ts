@@ -47,6 +47,47 @@ export interface AircraftPerformance {
   usableFuelGal: number;
 }
 
+/** How a block on the aircraft's schedule relates to the pilot (never carries identities). */
+export type BusyBlockKind = "reservation" | "own-reservation" | "maintenance" | "other";
+
+/** A busy interval on one aircraft, with local wall-clock renderings for narration. */
+export interface BusyBlock {
+  /** ISO 8601 start (UTC). */
+  start: string;
+  /** ISO 8601 end (UTC). */
+  end: string;
+  /** Same interval in the school's local time, "YYYY-MM-DD HH:mm". */
+  startLocal: string;
+  endLocal: string;
+  kind: BusyBlockKind;
+  /** Neutral description, e.g. "training booking" or "maintenance block". */
+  label?: string;
+}
+
+/** A free sub-interval of the requested window for one aircraft. */
+export interface FreeInterval {
+  start: string;
+  end: string;
+  startLocal: string;
+  endLocal: string;
+  durationHours: number;
+}
+
+/** Per-tail detail: what is free, what blocks it, and airworthiness/roster flags. */
+export interface TailAvailability {
+  /** Tail number as written in the profile (e.g. "N556ND"). */
+  tail: string;
+  /** Provider's aircraft id when the tail is on the school roster. */
+  aircraftId: number | null;
+  status: "available" | "partially-available" | "unavailable" | "not-on-roster";
+  /** Free sub-intervals of the window (whole window = available for all of it). */
+  free: FreeInterval[];
+  /** Busy blocks overlapping the window (identities stripped). */
+  blocks: BusyBlock[];
+  /** Roster flags: open discrepancies, overdue dispatch-required maintenance, relocation, ... */
+  flags: string[];
+}
+
 /** Result of an aircraft-availability query for one window. */
 export interface AircraftAvailability {
   window: TimeWindow;
@@ -55,6 +96,8 @@ export interface AircraftAvailability {
   /** Which provider produced this (fixture, scheduler, ...). */
   source: string;
   notes: string[];
+  /** Per-tail detail (free intervals, blocking bookings, flags) when the provider knows it. */
+  tails?: TailAvailability[];
 }
 
 /** A candidate route sized to a window: out-and-back, or a local practice flight. */

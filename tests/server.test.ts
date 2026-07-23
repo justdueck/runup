@@ -6,8 +6,9 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { RESOURCE_MIME_TYPE } from "@modelcontextprotocol/ext-apps/server";
 import { createServer, PROFILE_UI_URI } from "../src/server.js";
+import { loadProfile } from "../src/profile.js";
 import { FixtureCalendarProvider } from "../src/providers/calendar.js";
-import { FixtureAvailabilityProvider } from "../src/providers/availability.js";
+import { FixtureAvailabilityProvider, SchedulerAvailabilityProvider } from "../src/providers/availability.js";
 import { NaiveRoutePlanner } from "../src/providers/routes.js";
 import { makeWindow } from "../src/types.js";
 import { fixtureWeatherClient } from "./helpers.js";
@@ -18,6 +19,7 @@ const EXPECTED_TOOLS = [
   "get_free_windows",
   "get_conditions",
   "get_aircraft_availability",
+  "get_scheduler_status",
   "plan_routes",
   "plan_day",
 ];
@@ -135,6 +137,56 @@ describe("runup MCP server", () => {
     expect(byAirport.KPAE.score?.verdict).toBe("go");
     expect(byAirport.KTIW.score?.verdict).toBe("no-go"); // BKN015 below the day ceiling minimum
     expect(payload.notes.join(" ")).toMatch(/home airports/);
+  });
+
+  it("get_scheduler_status reports an unconfigured scheduler with setup steps and no secrets", async () => {
+    const result = await client.callTool({ name: "get_scheduler_status", arguments: {} });
+    expect(result.isError).toBeFalsy();
+    const status = result.structuredContent as {
+      configured: boolean;
+      email: string | null;
+      notes: string[];
+      credentials: Record<string, unknown>;
+    };
+    expect(status.configured).toBe(false);
+    expect(status.email).toBeNull();
+    expect(status.notes.join(" ")).toMatch(/update_profile/);
+    expect(JSON.stringify(status)).not.toMatch(/password":\s*"[^[]/); // only variable names / booleans, never values
+  });
+
+  it("the default availability provider falls back to fixture data with a setup note", async () => {
+    const profileFile = path.join(dir, "profile.json");
+    const server = createServer({
+      profilePath: profileFile,
+      providers: {
+        calendar: new FixtureCalendarProvider([]),
+        availability: new SchedulerAvailabilityProvider({
+          loadProfile: () => loadProfile(profileFile),
+          env: {},
+          fixture: new FixtureAvailabilityProvider({ N678SP: [] }),
+        }),
+        routes: new NaiveRoutePlanner(),
+      },
+      weather: fixtureWeatherClient().client,
+      loadUiHtml: async () => "<html></html>",
+    });
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    await server.connect(serverTransport);
+    const other = new Client({ name: "test-client-2", version: "0.0.0" });
+    await other.connect(clientTransport);
+    try {
+      const result = await other.callTool({
+        name: "get_aircraft_availability",
+        arguments: { start: "2026-07-25T16:00:00Z", end: "2026-07-25T19:30:00Z" },
+      });
+      expect(result.isError).toBeFalsy();
+      const payload = result.structuredContent as { source: string; availableTails: string[]; notes: string[] };
+      expect(payload.source).toBe("fixture-availability");
+      expect(payload.availableTails).toEqual(["N678SP"]);
+      expect(payload.notes.join(" ")).toMatch(/No flight-school scheduler is configured/);
+    } finally {
+      await other.close();
+    }
   });
 
   it("get_aircraft_availability validates the window and returns free tails", async () => {
