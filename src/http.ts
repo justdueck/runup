@@ -86,6 +86,6 @@ export class NodeFetcher implements HttpJsonFetcher, HttpTextFetcher {
 }
 
 /** True for the abort raised by an expired AbortSignal.timeout() (or an aborted request). */
-export function isTimeoutError(err: unknown): boolean {
+function isTimeoutError(err: unknown): boolean {
   return err instanceof Error && (err.name === "TimeoutError" || err.name === "AbortError");
 }

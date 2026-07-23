@@ -15,13 +15,18 @@
  *
  * Known limitations (documented rather than papered over):
  * - Google's per-event "working location" / "focus time" entries are plain
- *   VEVENTs and therefore count as busy; TRANSP:TRANSPARENT ("Free") events
- *   and STATUS:CANCELLED events are ignored.
+ *   VEVENTs and therefore count as busy; TRANSP:TRANSPARENT ("Free") events,
+ *   STATUS:CANCELLED events - and per-occurrence Free / cancelled overrides
+ *   of a recurring event - are ignored.
  * - All-day events are date-based; they block whole local days (in the
  *   profile time zone) only when calendar.allDayEventsBlock is true, and the
  *   event buffers are not applied to them (the day is already fully blocked).
  * - Timed events with no DTEND/DURATION are treated as zero-length (they
  *   still block their buffers).
+ * - Floating times (no TZID and no trailing "Z") are interpreted in the
+ *   server host's zone by node-ical, not the profile zone. Google's secret
+ *   iCal feed always emits UTC or TZID'd times, so this only matters for
+ *   other, hand-written feeds.
  */
 import ical, { type CalendarResponse, type EventInstance, type VEvent } from "node-ical";
 import type { Profile } from "../profile.js";
@@ -108,7 +113,7 @@ export function scrubIcalUrls(text: string, urls: string[]): string {
 }
 
 /** Default network fetcher for feeds: timeout, calendar-friendly Accept, URL redacted from errors. */
-export function defaultIcalFetcher(): HttpTextFetcher {
+function defaultIcalFetcher(): HttpTextFetcher {
   return new NodeFetcher({
     headers: { Accept: "text/calendar, text/plain, */*" },
     describeUrl: () => "the configured iCal feed",
@@ -135,10 +140,16 @@ export class IcalCalendarProvider implements CalendarProvider {
       throw new Error("Invalid date range for the calendar query.");
     }
 
-    const calendars = await this.fetchCalendars();
-    const busy = busyIntervalsFromCalendars(calendars, { start: rangeStart, end: rangeEnd }, this.settings);
-    const minDurationHours = opts.minDurationHours ?? this.settings.minDurationHours;
-    return computeFreeWindows({ start: rangeStart, end: rangeEnd }, busy, this.settings, minDurationHours);
+    try {
+      const calendars = await this.fetchCalendars();
+      const busy = busyIntervalsFromCalendars(calendars, { start: rangeStart, end: rangeEnd }, this.settings);
+      const minDurationHours = opts.minDurationHours ?? this.settings.minDurationHours;
+      return computeFreeWindows({ start: rangeStart, end: rangeEnd }, busy, this.settings, minDurationHours);
+    } catch (err) {
+      // Defense in depth: nothing thrown out of the provider may carry a feed URL
+      // (fetch/parse errors are already scrubbed at their source below).
+      throw new Error(scrubIcalUrls(errorMessage(err), this.urls));
+    }
   }
 
   /** Fetch + parse every feed. Errors name the feed by number, never by URL. */
@@ -186,8 +197,7 @@ export function busyIntervalsFromCalendars(
     for (const component of Object.values(calendar)) {
       if (!component || (component as { type?: string }).type !== "VEVENT") continue;
       const event = component as VEvent;
-      if (event.status === "CANCELLED") continue; // deleted / cancelled event
-      if (isTransparent(event)) continue; // shows as "Free" (does not block)
+      if (event.status === "CANCELLED") continue; // whole series deleted / cancelled
 
       let instances: EventInstance[];
       try {
@@ -196,8 +206,11 @@ export function busyIntervalsFromCalendars(
         continue; // an unexpandable rule should not sink the whole query
       }
       for (const instance of instances) {
-        const instanceEvent = instance.event as VEvent | undefined;
-        if (instanceEvent?.status === "CANCELLED") continue; // cancelled single occurrence
+        // Status and transparency can differ per occurrence: a RECURRENCE-ID
+        // override marks a single occurrence cancelled or "Free" (TRANSPARENT).
+        const instanceEvent = (instance.event as VEvent | undefined) ?? event;
+        if (instanceEvent.status === "CANCELLED") continue; // cancelled single occurrence
+        if (isTransparent(instanceEvent)) continue; // shows as "Free" (does not block)
         if (instance.isFullDay) {
           if (!settings.allDayEventsBlock) continue;
           busy.push(allDayInterval(instance, settings.timeZone));
@@ -305,7 +318,7 @@ export function computeFreeWindows(
 }
 
 /** TimeWindow rendered in the profile time zone (ISO with offset + a short local label). */
-export function makeZonedWindow(interval: Interval, timeZone: string): TimeWindow {
+function makeZonedWindow(interval: Interval, timeZone: string): TimeWindow {
   const start = new Date(interval.start);
   const end = new Date(interval.end);
   const dateLabel = new Intl.DateTimeFormat("en-US", { timeZone, weekday: "short", month: "short", day: "numeric" }).format(start);

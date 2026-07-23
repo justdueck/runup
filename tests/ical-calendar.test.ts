@@ -1,6 +1,3 @@
-import { readFile } from "node:fs/promises";
-import path from "node:path";
-import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import ical from "node-ical";
 import {
@@ -16,9 +13,7 @@ import {
 } from "../src/providers/ical-calendar.js";
 import { defaultProfile } from "../src/profile.js";
 import type { HttpTextFetcher } from "../src/http.js";
-
-const FIXTURE_DIR = path.join(path.dirname(fileURLToPath(import.meta.url)), "fixtures");
-const readIcs = (name: string): Promise<string> => readFile(path.join(FIXTURE_DIR, name), "utf8");
+import { loadTextFixture as readIcs, MemoryIcsFetcher } from "./helpers.js";
 
 const SETTINGS: IcalCalendarSettings = {
   timeZone: "America/Los_Angeles",
@@ -31,18 +26,6 @@ const SETTINGS: IcalCalendarSettings = {
 };
 
 const at = (iso: string): number => Date.parse(iso);
-
-/** In-memory ICS "server": URL -> ICS text (never touches the network). */
-class MemoryIcsFetcher implements HttpTextFetcher {
-  readonly requested: string[] = [];
-  constructor(private readonly bodies: Record<string, string>) {}
-  async getText(url: string): Promise<string> {
-    this.requested.push(url);
-    const body = this.bodies[url];
-    if (body === undefined) throw new Error("MemoryIcsFetcher: 404");
-    return body;
-  }
-}
 
 describe("interval math", () => {
   it("merges overlapping and touching intervals", () => {
@@ -184,7 +167,7 @@ describe("IcalCalendarProvider (in-memory fetcher, several feeds)", () => {
       ["2026-07-24T11:30:00-07:00", "2026-07-24T13:00:00-07:00", 1.5],
       ["2026-07-24T16:00:00-07:00", "2026-07-24T21:00:00-07:00", 5],
     ]);
-    expect(fetcher.requested.sort()).toEqual([PLAIN_URL, TZID_URL].sort());
+    expect(fetcher.requestedUrls.sort()).toEqual([PLAIN_URL, TZID_URL].sort());
 
     // Default minimum duration (2.5 h from settings) drops the short gaps.
     const strict = await provider.getFreeWindows({ start: "2026-07-24T07:00:00.000Z", end: "2026-07-25T07:00:00.000Z" });

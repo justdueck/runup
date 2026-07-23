@@ -236,7 +236,9 @@ tests/                vitest suites + fixtures (weather JSON, iCal .ics files)
   ("flying" vs "busy") are not built. Known parser limits: Google "working
   location" / focus-time entries are ordinary events and count as busy; all-day
   events are date-based (whole local days when they block); events with no
-  DTEND/DURATION are zero-length (their buffers still apply); one URL per feed.
+  DTEND/DURATION are zero-length (their buffers still apply); floating times
+  (no `TZID` and no trailing `Z` — never emitted by Google's feed) are read in
+  the server host's zone rather than the profile zone; one URL per feed.
 
 ## Notes
 

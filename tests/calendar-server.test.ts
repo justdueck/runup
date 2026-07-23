@@ -1,7 +1,6 @@
 import { mkdtemp, readFile, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
@@ -12,9 +11,7 @@ import { NaiveRoutePlanner } from "../src/providers/routes.js";
 import { REDACTED_ICAL_URL } from "../src/profile.js";
 import { makeWindow } from "../src/types.js";
 import type { HttpTextFetcher } from "../src/http.js";
-import { fixtureWeatherClient } from "./helpers.js";
-
-const FIXTURE_DIR = path.join(path.dirname(fileURLToPath(import.meta.url)), "fixtures");
+import { fixtureWeatherClient, loadTextFixture, MemoryIcsFetcher } from "./helpers.js";
 
 /** Stand-ins for Google Calendar "secret address in iCal format" URLs (bearer secrets). */
 const SECRET_URL = "https://calendar.google.com/calendar/ical/pilot%40example.com/private-3f9e2bd0secret/basic.ics";
@@ -25,19 +22,11 @@ const ALL_SECRET_URLS = `${SECRET_URL},${SECRET_URL_2},${SECRET_URL_3}`;
 
 /** Serves the fixture calendars for the secret URLs entirely in memory (one feed per fixture). */
 async function inMemoryIcsFetcher(): Promise<HttpTextFetcher> {
-  const load = (name: string): Promise<string> => readFile(path.join(FIXTURE_DIR, name), "utf8");
-  const feeds: Record<string, string> = {
-    [SECRET_URL]: await load("ical-plain.ics"),
-    [SECRET_URL_2]: await load("ical-tzid.ics"),
-    [SECRET_URL_3]: await load("ical-allday.ics"),
-  };
-  return {
-    getText: async (url: string) => {
-      const body = feeds[url];
-      if (body === undefined) throw new Error("unexpected calendar URL in test");
-      return body;
-    },
-  };
+  return new MemoryIcsFetcher({
+    [SECRET_URL]: await loadTextFixture("ical-plain.ics"),
+    [SECRET_URL_2]: await loadTextFixture("ical-tzid.ics"),
+    [SECRET_URL_3]: await loadTextFixture("ical-allday.ics"),
+  });
 }
 
 let dir: string;

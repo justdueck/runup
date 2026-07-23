@@ -13,13 +13,9 @@
  */
 import { z } from "zod";
 import { round1 } from "./util.js";
-import { DEFAULT_FETCH_TIMEOUT_MS, NodeFetcher, type HttpJsonFetcher, type NodeFetcherOptions } from "./http.js";
+import { NodeFetcher, type HttpJsonFetcher } from "./http.js";
 
 export const AWC_BASE_URL = "https://aviationweather.gov/api/data";
-
-// Re-exported for backward compatibility (the fetcher used to live here).
-export { DEFAULT_FETCH_TIMEOUT_MS, NodeFetcher };
-export type { HttpJsonFetcher, NodeFetcherOptions };
 
 // --- Schemas (tolerant) ----------------------------------------------------
 

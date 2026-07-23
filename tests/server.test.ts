@@ -32,7 +32,9 @@ function firstText(result: unknown): string | undefined {
 
 beforeEach(async () => {
   dir = await mkdtemp(path.join(os.tmpdir(), "runup-server-"));
-  const morning = makeWindow(new Date(2026, 6, 25, 9, 0), new Date(2026, 6, 25, 12, 30), "morning");
+  // 09:00-12:30 in the pilot's (profile) zone - America/Los_Angeles - so the
+  // fixture window lands inside plan_day's profile-zone day on any host zone.
+  const morning = makeWindow(new Date("2026-07-25T09:00:00-07:00"), new Date("2026-07-25T12:30:00-07:00"), "morning");
   const server = createServer({
     profilePath: path.join(dir, "profile.json"),
     providers: {

@@ -1,11 +1,14 @@
 import { describe, expect, it } from "vitest";
-import { dateSpan, dayRange, GENERIC_AIRCRAFT, planDay, resolveAircraftPerformance } from "../src/planning.js";
+import { dateSpanInZone, dayRangeInZone, GENERIC_AIRCRAFT, planDay, resolveAircraftPerformance } from "../src/planning.js";
 import { defaultProfile, type Profile } from "../src/profile.js";
 import { FixtureCalendarProvider } from "../src/providers/calendar.js";
 import { FixtureAvailabilityProvider } from "../src/providers/availability.js";
 import { NaiveRoutePlanner } from "../src/providers/routes.js";
 import { makeWindow } from "../src/types.js";
 import { fixtureWeatherClient } from "./helpers.js";
+
+/** The profile time zone the day/range helpers are exercised in. */
+const TZ = "America/Los_Angeles";
 
 function profileWithAircraft(): Profile {
   return {
@@ -48,8 +51,10 @@ describe("resolveAircraftPerformance", () => {
 describe("planDay", () => {
   it("composes windows, availability, conditions and routes", async () => {
     const date = "2026-07-25";
-    const morning = makeWindow(new Date(2026, 6, 25, 9, 0), new Date(2026, 6, 25, 12, 30), "morning");
-    const evening = makeWindow(new Date(2026, 6, 25, 17, 0), new Date(2026, 6, 25, 18, 0), "evening (short)");
+    // Fixture windows are pinned to the profile zone (America/Los_Angeles, PDT) so
+    // they overlap plan_day's profile-zone day regardless of the host time zone.
+    const morning = makeWindow(new Date("2026-07-25T09:00:00-07:00"), new Date("2026-07-25T12:30:00-07:00"), "morning");
+    const evening = makeWindow(new Date("2026-07-25T17:00:00-07:00"), new Date("2026-07-25T18:00:00-07:00"), "evening (short)");
     const { client } = fixtureWeatherClient();
 
     const plan = await planDay(
@@ -91,19 +96,25 @@ describe("planDay", () => {
     expect(plan.notes.join(" ")).toMatch(/CURRENT METAR/);
   });
 
-  it("validates the date format", () => {
-    expect(() => dayRange("2026/07/25")).toThrow(/YYYY-MM-DD/);
-    const r = dayRange("2026-07-25");
+  it("validates the date format and interprets days in the given zone", () => {
+    expect(() => dayRangeInZone("2026/07/25", TZ)).toThrow(/YYYY-MM-DD/);
+    const r = dayRangeInZone("2026-07-25", TZ);
+    // Midnight-to-midnight of the LOCAL day (2026-07-25 in America/Los_Angeles = 07:00Z).
+    expect(r).toEqual({ start: "2026-07-25T07:00:00.000Z", end: "2026-07-26T07:00:00.000Z" });
     expect(Date.parse(r.end) - Date.parse(r.start)).toBe(24 * 3_600_000);
+    // A multi-day span is inclusive of the end date; an inverted span is rejected.
+    const span = dateSpanInZone("2026-07-25", "2026-07-26", TZ);
+    expect(Date.parse(span.end) - Date.parse(span.start)).toBe(48 * 3_600_000);
+    expect(() => dateSpanInZone("2026-07-26", "2026-07-25", TZ)).toThrow(/before startDate/);
   });
 
   it("rejects impossible calendar dates instead of rolling them over", () => {
-    expect(() => dayRange("2026-02-30")).toThrow(/real calendar date/); // no Feb 30
-    expect(() => dayRange("2026-04-31")).toThrow(/real calendar date/); // April has 30 days
-    expect(() => dayRange("2026-13-01")).toThrow(/real calendar date/); // no month 13
-    expect(() => dayRange("2026-00-10")).toThrow(/real calendar date/); // no month 0
-    expect(() => dayRange("2026-02-29")).toThrow(/real calendar date/); // 2026 is not a leap year
-    expect(() => dayRange("2028-02-29")).not.toThrow(); // 2028 is
-    expect(() => dateSpan("2026-07-25", "2026-06-31")).toThrow(/real calendar date/); // end date checked too
+    expect(() => dayRangeInZone("2026-02-30", TZ)).toThrow(/real calendar date/); // no Feb 30
+    expect(() => dayRangeInZone("2026-04-31", TZ)).toThrow(/real calendar date/); // April has 30 days
+    expect(() => dayRangeInZone("2026-13-01", TZ)).toThrow(/real calendar date/); // no month 13
+    expect(() => dayRangeInZone("2026-00-10", TZ)).toThrow(/real calendar date/); // no month 0
+    expect(() => dayRangeInZone("2026-02-29", TZ)).toThrow(/real calendar date/); // 2026 is not a leap year
+    expect(() => dayRangeInZone("2028-02-29", TZ)).not.toThrow(); // 2028 is
+    expect(() => dateSpanInZone("2026-07-25", "2026-06-31", TZ)).toThrow(/real calendar date/); // end date checked too
   });
 });

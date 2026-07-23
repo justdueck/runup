@@ -202,30 +202,6 @@ export function resolveAircraftPerformance(
   return { aircraft: GENERIC_AIRCRAFT, notes };
 }
 
-/** Local-midnight span covering startDate..endDate inclusive (both YYYY-MM-DD). */
-export function dateSpan(startDate: string, endDate: string): DateRange {
-  const parse = (d: string): Date => {
-    const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(d);
-    if (!m) throw new Error(`dates must be YYYY-MM-DD, got "${d}"`);
-    const [year, month, day] = [Number(m[1]), Number(m[2]), Number(m[3])];
-    const date = new Date(year, month - 1, day, 0, 0, 0, 0);
-    // Round-trip: `new Date` silently rolls impossible dates (2026-02-30 -> Mar 2), so reject them.
-    if (date.getFullYear() !== year || date.getMonth() !== month - 1 || date.getDate() !== day) {
-      throw new Error(`dates must be real calendar dates, got "${d}"`);
-    }
-    return date;
-  };
-  const start = parse(startDate);
-  const end = parse(endDate);
-  end.setDate(end.getDate() + 1);
-  return { start: start.toISOString(), end: end.toISOString() };
-}
-
-/** Local-midnight-to-midnight range for a single YYYY-MM-DD date. */
-export function dayRange(date: string): DateRange {
-  return dateSpan(date, date);
-}
-
 /**
  * Midnight-to-midnight span of startDate..endDate (inclusive, YYYY-MM-DD)
  * where "midnight" is midnight in the given IANA time zone (the pilot's
