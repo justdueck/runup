@@ -1,0 +1,157 @@
+import { mkdtemp, rm } from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { Client } from "@modelcontextprotocol/sdk/client/index.js";
+import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
+import { RESOURCE_MIME_TYPE } from "@modelcontextprotocol/ext-apps/server";
+import { createServer, PROFILE_UI_URI } from "../src/server.js";
+import { FixtureCalendarProvider } from "../src/providers/calendar.js";
+import { FixtureAvailabilityProvider } from "../src/providers/availability.js";
+import { NaiveRoutePlanner } from "../src/providers/routes.js";
+import { makeWindow } from "../src/types.js";
+import { fixtureWeatherClient } from "./helpers.js";
+
+const EXPECTED_TOOLS = [
+  "get_profile",
+  "update_profile",
+  "get_free_windows",
+  "get_conditions",
+  "get_aircraft_availability",
+  "plan_routes",
+  "plan_day",
+];
+
+let dir: string;
+let client: Client;
+
+beforeEach(async () => {
+  dir = await mkdtemp(path.join(os.tmpdir(), "runup-server-"));
+  const morning = makeWindow(new Date(2026, 6, 25, 9, 0), new Date(2026, 6, 25, 12, 30), "morning");
+  const server = createServer({
+    profilePath: path.join(dir, "profile.json"),
+    providers: {
+      calendar: new FixtureCalendarProvider([morning]),
+      availability: new FixtureAvailabilityProvider({ N678SP: [], N12345: [] }),
+      routes: new NaiveRoutePlanner(),
+    },
+    weather: fixtureWeatherClient().client,
+    loadUiHtml: async () => "<!DOCTYPE html><html><body><h1>profile form (test)</h1></body></html>",
+  });
+  const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+  await server.connect(serverTransport);
+  client = new Client({ name: "test-client", version: "0.0.0" });
+  await client.connect(clientTransport);
+});
+
+afterEach(async () => {
+  await client.close();
+  await rm(dir, { recursive: true, force: true });
+});
+
+describe("runup MCP server", () => {
+  it("registers the expected tools with UI metadata on the profile tools", async () => {
+    const { tools } = await client.listTools();
+    expect(tools.map((t) => t.name).sort()).toEqual([...EXPECTED_TOOLS].sort());
+
+    const getProfile = tools.find((t) => t.name === "get_profile")!;
+    const meta = getProfile._meta as Record<string, unknown> | undefined;
+    expect((meta?.ui as { resourceUri?: string } | undefined)?.resourceUri).toBe(PROFILE_UI_URI);
+    expect(meta?.["ui/resourceUri"]).toBe(PROFILE_UI_URI); // legacy key populated by registerAppTool
+
+    // `airports` is optional now: omitted -> defaults to the profile's home airports.
+    const conditions = tools.find((t) => t.name === "get_conditions")!;
+    expect(conditions.inputSchema.required ?? []).not.toContain("airports");
+  });
+
+  it("serves the profile & minimums View as an MCP Apps resource", async () => {
+    const { resources } = await client.listResources();
+    const uiResource = resources.find((r) => r.uri === PROFILE_UI_URI);
+    expect(uiResource?.mimeType).toBe(RESOURCE_MIME_TYPE);
+
+    const read = await client.readResource({ uri: PROFILE_UI_URI });
+    expect(read.contents[0]).toMatchObject({ uri: PROFILE_UI_URI, mimeType: RESOURCE_MIME_TYPE });
+    expect(String(read.contents[0].text)).toContain("profile form (test)");
+  });
+
+  it("get_profile returns defaults and update_profile persists a deep patch", async () => {
+    const before = await client.callTool({ name: "get_profile", arguments: {} });
+    expect((before.structuredContent as { homeAirports: string[] }).homeAirports).toEqual(["KPAE", "KTIW"]);
+
+    const updated = await client.callTool({
+      name: "update_profile",
+      arguments: { patch: { homeAirports: ["KBFI"], minimums: { day: { crosswindKt: 10 } } } },
+    });
+    const profile = updated.structuredContent as {
+      homeAirports: string[];
+      minimums: { day: { crosswindKt: number; ceilingFt: number } };
+    };
+    expect(profile.homeAirports).toEqual(["KBFI"]); // array replaced wholesale
+    expect(profile.minimums.day.crosswindKt).toBe(10);
+    expect(profile.minimums.day.ceilingFt).toBe(3000); // untouched
+
+    const after = await client.callTool({ name: "get_profile", arguments: {} });
+    expect((after.structuredContent as { homeAirports: string[] }).homeAirports).toEqual(["KBFI"]);
+  });
+
+  it("update_profile rejects invalid patches as tool errors", async () => {
+    const result = await client.callTool({
+      name: "update_profile",
+      arguments: { patch: { minimums: { day: { ceilingFt: -100 } } } },
+    });
+    expect(result.isError).toBe(true);
+  });
+
+  it("get_conditions scores fixture METARs against the profile minimums", async () => {
+    const result = await client.callTool({
+      name: "get_conditions",
+      arguments: { airports: ["KPAE", "KHQM"], runwayHeadingDeg: 340 },
+    });
+    expect(result.isError).toBeFalsy();
+    const payload = result.structuredContent as {
+      results: Array<{ airport: string; score: { verdict: string } | null; summary: { flightCategory: string } | null }>;
+    };
+    const byAirport = Object.fromEntries(payload.results.map((r) => [r.airport, r]));
+    expect(byAirport.KPAE.score?.verdict).toBe("go");
+    expect(byAirport.KHQM.score?.verdict).toBe("no-go");
+    expect(byAirport.KHQM.summary?.flightCategory).toBe("LIFR");
+  });
+
+  it("get_conditions defaults to the profile's home airports when none are given", async () => {
+    const result = await client.callTool({ name: "get_conditions", arguments: { runwayHeadingDeg: 340 } });
+    expect(result.isError).toBeFalsy();
+    const payload = result.structuredContent as {
+      airports: string[];
+      results: Array<{ airport: string; score: { verdict: string } | null }>;
+      notes: string[];
+    };
+    expect(payload.airports).toEqual(["KPAE", "KTIW"]);
+    const byAirport = Object.fromEntries(payload.results.map((r) => [r.airport, r]));
+    expect(byAirport.KPAE.score?.verdict).toBe("go");
+    expect(byAirport.KTIW.score?.verdict).toBe("no-go"); // BKN015 below the day ceiling minimum
+    expect(payload.notes.join(" ")).toMatch(/home airports/);
+  });
+
+  it("plan_day composes the full picture", async () => {
+    const result = await client.callTool({
+      name: "plan_day",
+      arguments: { date: "2026-07-25", runwayHeadingDeg: 340 },
+    });
+    expect(result.isError).toBeFalsy();
+    const plan = result.structuredContent as {
+      homeAirports: string[];
+      conditions: Array<{ airport: string; score: { verdict: string } | null }>;
+      windows: Array<{ availability: { availableTails: string[] } | null; routes: unknown[]; notes: string[] }>;
+    };
+    expect(plan.homeAirports).toEqual(["KPAE", "KTIW"]);
+    const byAirport = Object.fromEntries(plan.conditions.map((c) => [c.airport, c]));
+    expect(byAirport.KPAE.score?.verdict).toBe("go");
+    expect(byAirport.KTIW.score?.verdict).toBe("no-go");
+    expect(plan.windows).toHaveLength(1);
+    expect(plan.windows[0].availability?.availableTails).toEqual(["N12345", "N678SP"]);
+    expect(plan.windows[0].routes.length).toBeGreaterThan(0);
+    expect(plan.windows[0].notes.join(" ")).toMatch(/below personal minimums at KTIW/);
+    // Text fallback is always present for non-UI hosts.
+    expect((result.content as Array<{ type: string }>)[0].type).toBe("text");
+  });
+});

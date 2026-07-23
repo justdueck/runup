@@ -1,0 +1,21 @@
+{
+  "note": "PLACEHOLDER DATA (Puget Sound / Pacific Northwest sample) for scaffolding only. Coordinates and field elevations were transcribed from the public sources named in each airport's `source` field, then rounded; no runway data is modeled yet. TODO: replace with the FAA NASR airport dataset (APT records, or a filtered regional extract) and add per-runway headings before trusting distances or crosswind selection.",
+  "airports": [
+    { "icao": "KPAE", "name": "Snohomish County (Paine Field)", "lat": 47.9073, "lon": -122.2821, "elevationFt": 607, "towered": true, "note": "Home field (Everett)", "source": "FAA AIP Washington / SkyVector: ARP 47-54-26.345N 122-16-55.538W, elev 606.9 ft" },
+    { "icao": "KTIW", "name": "Tacoma Narrows", "lat": 47.2680, "lon": -122.5782, "elevationFt": 294, "towered": true, "note": "Home field (Gig Harbor / Tacoma)", "source": "SkyVector KTIW: N47 16.08 W122 34.69, elev 294 ft MSL" },
+    { "icao": "KBFI", "name": "Boeing Field / King County Intl", "lat": 47.5300, "lon": -122.3020, "elevationFt": 21, "towered": true, "note": "Under the Seattle Class B - clearance / transponder", "source": "SkyVector KBFI: N47 31.80 W122 18.12, elev 21 ft MSL" },
+    { "icao": "KRNT", "name": "Renton Municipal", "lat": 47.4931, "lon": -122.2160, "elevationFt": 32, "towered": true, "source": "AirNav/GreatCircleMapper via search: 47-29-35N 122-12-57W, elev 32 ft MSL" },
+    { "icao": "KOLM", "name": "Olympia Regional", "lat": 46.9694, "lon": -122.9030, "elevationFt": 209, "towered": true, "source": "SkyVector/GreatCircleMapper KOLM: 46-58-09N 122-54-10W, elev 209 ft MSL" },
+    { "icao": "KPWT", "name": "Bremerton National", "lat": 47.4901, "lon": -122.7649, "elevationFt": 444, "towered": false, "source": "SkyVector/AirNav KPWT: 47.4901N 122.7649W, elev 444 ft MSL" },
+    { "icao": "KAWO", "name": "Arlington Municipal", "lat": 48.1606, "lon": -122.1589, "elevationFt": 142, "towered": false, "source": "GreatCircleMapper KAWO: 48-09-38N 122-09-32W, elev 142 ft" },
+    { "icao": "KBLI", "name": "Bellingham International", "lat": 48.7928, "lon": -122.5380, "elevationFt": 170, "towered": true, "source": "SkyVector/GreatCircleMapper KBLI: 48-47-34N 122-32-16W, elev 170 ft" },
+    { "icao": "KBVS", "name": "Skagit Regional (Burlington)", "lat": 48.4705, "lon": -122.4217, "elevationFt": 145, "towered": false, "source": "SkyVector KBVS: N48 28.23 W122 25.30, surveyed elev 145 ft MSL" },
+    { "icao": "KFHR", "name": "Friday Harbor", "lat": 48.5220, "lon": -123.0240, "elevationFt": 113, "towered": false, "note": "San Juan Islands", "source": "AirNav/GreatCircleMapper KFHR: 48-31-19N 123-01-26W, elev 113 ft" },
+    { "icao": "KORS", "name": "Orcas Island (Eastsound)", "lat": 48.7082, "lon": -122.9100, "elevationFt": 34, "towered": false, "note": "San Juan Islands", "source": "SkyVector KORS: 48-42-25N 122-54-37W, surveyed elev 34 ft MSL (FAA lists 34.8 ft)" },
+    { "icao": "S43", "name": "Harvey Field (Snohomish)", "lat": 47.9048, "lon": -122.1027, "elevationFt": 22, "towered": false, "source": "SkyVector S43: N47 54.29 W122 06.16, elev 22 ft MSL" },
+    { "icao": "0S9", "name": "Jefferson County Intl (Port Townsend)", "lat": 48.0538, "lon": -122.8106, "elevationFt": 110, "towered": false, "source": "SkyVector 0S9: surveyed elev 110 ft MSL; coords 48.0538N 122.8106W (Wikipedia / Port of Port Townsend list 110.1 ft)" },
+    { "icao": "KCLM", "name": "William R Fairchild Intl (Port Angeles)", "lat": 48.1164, "lon": -123.4933, "elevationFt": 291, "towered": false, "source": "Wikipedia/SkyVector KCLM: 48-06-59N 123-29-36W, elev 291 ft" },
+    { "icao": "KHQM", "name": "Bowerman Field (Hoquiam)", "lat": 46.9711, "lon": -123.9367, "elevationFt": 18, "towered": false, "note": "Coastal - watch marine layer", "source": "Wikipedia/SkyVector KHQM: N46 58 16 W123 56 12, elev 18 ft" },
+    { "icao": "KELN", "name": "Bowers Field (Ellensburg)", "lat": 47.0330, "lon": -120.5307, "elevationFt": 1764, "towered": false, "note": "Over-the-Cascades option - check pass / mountain weather", "source": "SkyVector/Wikipedia KELN: 47.0330N 120.5307W, elev 1,764 ft MSL" }
+  ]
+}

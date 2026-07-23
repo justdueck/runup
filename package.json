@@ -1,0 +1,32 @@
+{
+  "name": "runup",
+  "version": "0.1.0",
+  "description": "Personal flight-planning MCP server: free calendar windows, aircraft availability, weather scored against personal minimums, and candidate routes.",
+  "type": "module",
+  "private": true,
+  "main": "dist/index.js",
+  "bin": {
+    "runup": "dist/index.js"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json && node scripts/build-ui.mjs",
+    "typecheck": "tsc -p tsconfig.json --noEmit && tsc -p tsconfig.ui.json --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "start": "node dist/index.js"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/ext-apps": "^1.7.5",
+    "@modelcontextprotocol/sdk": "^1.29.0",
+    "zod": "^4.4.3"
+  },
+  "devDependencies": {
+    "@types/node": "^22.20.1",
+    "esbuild": "^0.28.1",
+    "typescript": "^5.9.3",
+    "vitest": "^4.1.10"
+  }
+}

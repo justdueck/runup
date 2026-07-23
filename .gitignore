@@ -1,0 +1,10 @@
+node_modules/
+dist/
+coverage/
+*.log
+.DS_Store
+
+# Local profile data lives outside the repo (~/.runup by default),
+# but ignore it here too in case RUNUP_HOME points inside the checkout.
+.runup/
+profile.json
