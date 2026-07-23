@@ -16,7 +16,7 @@ import { computeAvailability, toAircraftAvailability } from "./availability.js";
 import type { NeedleNineConfig } from "./config.js";
 import { resolveSchedulerConfig } from "./config.js";
 import { NeedleNineSetupError, resolveNeedleNineCredentials, type NeedleNineCredentials } from "./credentials.js";
-import { briefError, PortalError, PortalSession, type SchedulerSession } from "./portal-session.js";
+import { briefError, defaultChromiumSandbox, PortalError, PortalSession, type SchedulerSession } from "./portal-session.js";
 import type { PortalScheduleRecord } from "./site.js";
 import { localDateOf, localDatesSpanning } from "./time.js";
 
@@ -57,11 +57,6 @@ export class NeedleNineProvider implements AvailabilityProvider {
   private creds: NeedleNineCredentials | null = null;
 
   constructor(private readonly deps: NeedleNineProviderDeps) {}
-
-  /** True when the profile (or environment) configures a NeedleNine scheduler. */
-  static isConfigured(profile: Profile, env: NodeJS.ProcessEnv = process.env): boolean {
-    return resolveSchedulerConfig(profile, env) !== null;
-  }
 
   async getAircraftAvailability(window: TimeWindow): Promise<AircraftAvailability> {
     const profile = await this.deps.loadProfile();
@@ -181,6 +176,7 @@ export class NeedleNineProvider implements AvailabilityProvider {
           ...(cfg.tenantId ? { tenantId: cfg.tenantId } : {}),
           ...(env.RUNUP_CHROMIUM_PATH ? { executablePath: env.RUNUP_CHROMIUM_PATH } : {}),
           headless: env.RUNUP_HEADLESS !== "0",
+          chromiumSandbox: defaultChromiumSandbox(env, this.deps.platform),
           ...(this.deps.logger ? { logger: this.deps.logger } : {}),
         },
         creds,

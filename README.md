@@ -116,8 +116,10 @@ running server, closed when the server exits). Non-macOS hosts can set
 `RUNUP_NEEDLENINE_EMAIL` / `RUNUP_NEEDLENINE_PASSWORD` in the server
 environment instead (less safe: the password sits in the process env). Other
 knobs: `RUNUP_CHROMIUM_PATH` (use an existing Chromium binary),
-`RUNUP_HEADLESS=0` (show the browser while debugging), and the profile's
-`scheduler.timezone` (default `America/Los_Angeles`, the school's zone).
+`RUNUP_HEADLESS=0` (show the browser while debugging),
+`RUNUP_CHROMIUM_SANDBOX=1|0` (renderer sandbox; on by default on macOS), and
+the profile's `scheduler.timezone` (default `America/Los_Angeles`, the
+school's zone).
 
 ## Minimums scoring
 

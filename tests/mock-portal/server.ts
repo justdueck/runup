@@ -223,6 +223,13 @@ function schedulePage(userId: number, timezone: string): string {
 <html lang="en"><head><meta charset="utf-8"><title>NeedleNine schedule (mock)</title><style>${BASE_STYLE}</style></head>
 <body>
 <app-schedule><app-reservation>
+  <!-- Decoy caret icons OUTSIDE the date toolbar (a menu expander): clicking one would
+       hit a mutation endpoint, proving the automation only uses the toolbar-scoped carets. -->
+  <div class="p-panelmenu" style="margin-bottom: 8px">
+    <i class="pi pi-caret-right" id="decoyExpander" title="Expand menu"></i>
+    <i class="pi pi-caret-left" id="decoyCollapse" title="Collapse menu"></i>
+    <span>side menu</span>
+  </div>
   <div class="date-selection">
     <i class="pi pi-caret-left" id="prevDay" title="Previous day"></i>
     <span id="dateLabel"></span>
@@ -296,6 +303,8 @@ function schedulePage(userId: number, timezone: string): string {
   document.getElementById('prevDay').addEventListener('click', function () { current = addDays(current, -1); loadDay(current); });
   document.getElementById('nextDay').addEventListener('click', function () { current = addDays(current, 1); loadDay(current); });
   // Controls the automation must NEVER touch (they hit mutation endpoints):
+  document.getElementById('decoyExpander').addEventListener('click', function () { fetch('/api/schedule/checkin', { method: 'POST', headers: headers, body: '{"decoy":true}' }); });
+  document.getElementById('decoyCollapse').addEventListener('click', function () { fetch('/api/schedule/deleteappointment', { method: 'POST', headers: headers, body: '{"decoy":true}' }); });
   document.getElementById('bookNow').addEventListener('click', function () { fetch('/api/schedule/creation/aircraft', { method: 'POST', headers: headers, body: '{}' }); });
   document.getElementById('checkIn').addEventListener('click', function () { fetch('/api/schedule/checkin', { method: 'POST', headers: headers, body: '{}' }); });
   document.getElementById('cancelBooking').addEventListener('click', function () { fetch('/api/schedule/deleteappointment', { method: 'POST', headers: headers, body: '{}' }); });

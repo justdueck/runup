@@ -66,6 +66,8 @@ export interface PortalSessionOptions {
   headless?: boolean;
   /** Chromium binary override (env RUNUP_CHROMIUM_PATH). */
   executablePath?: string;
+  /** Enable the Chromium renderer sandbox (default: on for macOS/Windows, off for Linux containers). */
+  chromiumSandbox?: boolean;
   navigationTimeoutMs?: number;
   loginTimeoutMs?: number;
   /** How long to wait for the app to issue a schedule request after we act. */
@@ -135,6 +137,21 @@ export async function loadPlaywright(): Promise<PlaywrightModule> {
     });
   }
   return playwrightPromise;
+}
+
+/**
+ * Whether to run Chromium with its renderer sandbox: on for macOS/Windows
+ * hosts, off for Linux (containers/root often can't use it), overridable
+ * with RUNUP_CHROMIUM_SANDBOX=1/0.
+ */
+export function defaultChromiumSandbox(
+  env: NodeJS.ProcessEnv = process.env,
+  platform: NodeJS.Platform = process.platform,
+): boolean {
+  const override = env.RUNUP_CHROMIUM_SANDBOX;
+  if (override === "1" || override === "true") return true;
+  if (override === "0" || override === "false") return false;
+  return platform === "darwin" || platform === "win32";
 }
 
 /** Remove Playwright debug tokens (pw:*, playwright*, "*") from DEBUG and unset PWDEBUG. */
@@ -299,6 +316,7 @@ export class PortalSession implements SchedulerSession {
     try {
       this.browser = await pw.chromium.launch({
         headless: this.opts.headless ?? true,
+        chromiumSandbox: this.opts.chromiumSandbox ?? defaultChromiumSandbox(),
         ...(executablePath ? { executablePath } : {}),
         args: ["--disable-blink-features=AutomationControlled"],
       });
@@ -475,16 +493,24 @@ export class PortalSession implements SchedulerSession {
   /** Click the previous/next-day caret once and consume the resulting schedule payload. */
   private async stepDay(direction: "forward" | "back"): Promise<void> {
     const page = this.requirePage();
-    const selector = direction === "forward" ? SCHEDULE_CONTROLS.nextDay : SCHEDULE_CONTROLS.previousDay;
-    const control = page.locator(selector).first();
+    const candidates = direction === "forward" ? SCHEDULE_CONTROLS.nextDay : SCHEDULE_CONTROLS.previousDay;
     try {
-      await control.waitFor({ state: "visible", timeout: this.cfg.navigationTimeoutMs });
+      await page.locator(candidates.join(", ")).first().waitFor({ state: "visible", timeout: this.cfg.navigationTimeoutMs });
     } catch {
       throw new PortalError(
         "site-changed",
         "The schedule's previous/next-day controls were not found.",
         "The date toolbar may have changed; see SCHEDULE_CONTROLS in src/providers/needlenine/site.ts.",
       );
+    }
+    // Prefer the toolbar-scoped selector so a caret icon elsewhere on the page is never clicked.
+    let control = page.locator(candidates[0]).first();
+    for (const selector of candidates) {
+      const scoped = page.locator(selector);
+      if ((await scoped.count()) > 0) {
+        control = scoped.first();
+        break;
+      }
     }
     const responsePromise = this.nextScheduleResponse(this.cfg.responseTimeoutMs);
     try {
@@ -510,13 +536,7 @@ export class PortalSession implements SchedulerSession {
    * "parse boundary changed" error (we never guess).
    */
   private async settleCaptures(seen: ScheduleResponseSeen): Promise<void> {
-    const deadline = Date.now() + this.cfg.captureGraceMs;
-    for (;;) {
-      await this.drainCaptures(seen.date);
-      if (this.dayCache.has(seen.date)) return;
-      if (Date.now() >= deadline) break;
-      await sleep(CAPTURE_POLL_MS);
-    }
+    if (await this.pollCaptures(() => this.dayCache.has(seen.date), seen.date)) return;
     const bodyLength = await seen.bodyLength;
     if (bodyLength >= 0 && bodyLength <= EMPTY_SCHEDULE_BODY_MAX_BYTES) {
       this.dayCache.set(seen.date, { records: [], at: Date.now() });
@@ -530,19 +550,24 @@ export class PortalSession implements SchedulerSession {
   }
 
   private async waitForRoster(): Promise<PortalRosterRecord[]> {
-    const deadline = Date.now() + this.cfg.captureGraceMs;
-    for (;;) {
-      await this.drainCaptures(null);
-      const fresh = this.rosterRecords && Date.now() - this.rosterRecords.at < this.cfg.rosterTtlMs;
-      if (fresh) return this.rosterRecords!.records;
-      if (Date.now() >= deadline) break;
-      await sleep(CAPTURE_POLL_MS);
-    }
+    const isFresh = (): boolean => this.rosterRecords !== null && Date.now() - this.rosterRecords.at < this.cfg.rosterTtlMs;
+    if (await this.pollCaptures(isFresh, null)) return this.rosterRecords!.records;
     throw new PortalError(
       "site-changed",
       "The aircraft roster was not observed on the schedule page.",
       "The portal may load the roster differently now; see classifyPortalPayload in src/providers/needlenine/site.ts.",
     );
+  }
+
+  /** Drain in-page captures until `ready()` holds or the grace period lapses. */
+  private async pollCaptures(ready: () => boolean, attributionDate: string | null): Promise<boolean> {
+    const deadline = Date.now() + this.cfg.captureGraceMs;
+    for (;;) {
+      await this.drainCaptures(attributionDate);
+      if (ready()) return true;
+      if (Date.now() >= deadline) return false;
+      await sleep(CAPTURE_POLL_MS);
+    }
   }
 
   /** Move every queued in-page capture into node-side caches. */

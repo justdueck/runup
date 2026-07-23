@@ -100,15 +100,18 @@ export const LOGIN_ERROR_TEXT = /invalid email or password/i;
 // --- Schedule page ----------------------------------------------------------------
 
 /**
- * Day navigation on the reservation calendar: the date toolbar has caret
- * icons that step one day back/forward, each triggering a fresh schedule
- * fetch for the new tenant-local day. (There is also a p-calendar picker;
- * stepping day-by-day and reading the app's own request URLs is the more
- * robust automation path, so v1 only uses the carets.)
+ * Day navigation on the reservation calendar: the date toolbar
+ * (div.date-selection) has caret icons that step one day back/forward, each
+ * triggering a fresh schedule fetch for the new tenant-local day. (There is
+ * also a p-calendar picker; stepping day-by-day and reading the app's own
+ * request URLs is the more robust automation path, so v1 only uses the
+ * carets.) Each entry lists selectors in preference order: the toolbar-scoped
+ * one first so a caret icon elsewhere on the page can never be clicked, the
+ * bare icon class as a fallback.
  */
 export const SCHEDULE_CONTROLS = {
-  previousDay: "i.pi-caret-left",
-  nextDay: "i.pi-caret-right",
+  previousDay: [".date-selection i.pi-caret-left", "i.pi-caret-left"],
+  nextDay: [".date-selection i.pi-caret-right", "i.pi-caret-right"],
 } as const;
 
 /**

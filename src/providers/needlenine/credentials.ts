@@ -160,7 +160,7 @@ export async function resolveNeedleNineCredentials(opts: ResolveCredentialsOptio
 
   const checked: string[] = [];
   if (platform === "darwin") {
-    const secret = await readKeychainPassword(email, opts.execFile ? { execFile: opts.execFile } : {});
+    const secret = await readKeychainPassword(email, { execFile: opts.execFile });
     if (secret) return { email, password: secret, source: "keychain" };
     checked.push(`the macOS keychain (service "${KEYCHAIN_SERVICE}", account "${email}")`);
   }
