@@ -1,9 +1,9 @@
 /**
  * Aircraft availability providers.
  *
- * The flight school's scheduling system is not confirmed yet, so availability
- * is a pluggable provider. FixtureAvailabilityProvider serves canned bookings;
- * SchedulerBrowserProvider is the placeholder for the real thing.
+ * Availability is a pluggable provider. FixtureAvailabilityProvider serves
+ * canned bookings; NeedleNineProvider is the (not yet implemented) placeholder
+ * for the flight school's real scheduling system.
  */
 import type { AircraftAvailability, TimeWindow } from "../types.js";
 import type { AvailabilityProvider } from "./types.js";
@@ -57,21 +57,25 @@ export function defaultFixtureLedger(now: Date = new Date()): BookingLedger {
 }
 
 /**
- * TODO: SchedulerBrowserProvider.
+ * NeedleNineProvider - the flight school's scheduler. STUB: not implemented.
  *
- * Placeholder for the flight school's scheduling system. Once the system is
- * known this will drive it - most likely a headless browser (Playwright)
- * logging in with credentials pulled from the OS keychain (see
- * getSchedulerCredentials in profile.ts), scraping the schedule grid for the
- * requested window, and mapping bookings to tails. If the school's system
- * exposes an API or iCal feed, prefer that over browser automation.
+ * The school uses NeedleNine (needlenine.com), which has no public API. Its
+ * member portal is a SPA at portal.needlenine.com backed by a JSON API at
+ * api.needlenine.com; login is email/password (no MFA or captcha documented).
+ * Intended approach: authenticate, then call the same JSON endpoints the
+ * portal's schedule page uses (mapped from a browser network capture) and
+ * translate reservations for the window into busy tails. Fallback if those
+ * endpoints prove unstable: drive the portal with Playwright and read the
+ * schedule grid. Personal-use only, low volume, on demand - no polling.
+ * Credentials come from the OS keychain via getSchedulerCredentials()
+ * (also not implemented), never from profile.json.
  */
-export class SchedulerBrowserProvider implements AvailabilityProvider {
-  readonly name = "scheduler-browser (not implemented)";
+export class NeedleNineProvider implements AvailabilityProvider {
+  readonly name = "needlenine (not implemented)";
 
   async getAircraftAvailability(_window: TimeWindow): Promise<AircraftAvailability> {
     throw new Error(
-      "SchedulerBrowserProvider is not implemented yet - the school's scheduling system has not been chosen. " +
+      "NeedleNineProvider is not implemented yet - the NeedleNine portal integration has not been built. " +
         "Use FixtureAvailabilityProvider for now.",
     );
   }

@@ -1,4 +1,4 @@
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, readdir, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -70,6 +70,25 @@ describe("profile store", () => {
     await patchProfile({ homeAirports: ["khqm", " kpwt "] }, file); // trimmed + uppercased by the schema
     const loaded = await loadProfile(file);
     expect(loaded.homeAirports).toEqual(["KHQM", "KPWT"]);
+  });
+
+  it("serializes overlapping patches so both persist and no temp files leak", async () => {
+    // Two update_profile-style calls fired concurrently against the same file.
+    // Unserialized, both would read the same starting profile and the second
+    // write would silently drop the first patch.
+    const [first, second] = await Promise.all([
+      patchProfile({ minimums: { day: { ceilingFt: 4200 } } }, file),
+      patchProfile({ homeAirports: ["KBFI"] }, file),
+    ]);
+    const loaded = await loadProfile(file);
+    expect(loaded.minimums.day.ceilingFt).toBe(4200); // first patch persisted
+    expect(loaded.homeAirports).toEqual(["KBFI"]); // second patch persisted
+    // Applied in order: the second save was built on top of the first patch's result.
+    expect(first.homeAirports).toEqual(defaultProfile().homeAirports);
+    expect(second.minimums.day.ceilingFt).toBe(4200);
+    expect(second.homeAirports).toEqual(["KBFI"]);
+    // Atomic writes: no leftover temp files next to profile.json.
+    expect((await readdir(dir)).filter((f) => f.includes(".tmp-"))).toEqual([]);
   });
 
   it("rejects unknown keys and invalid identifiers in patches", () => {

@@ -196,7 +196,13 @@ export function dateSpan(startDate: string, endDate: string): DateRange {
   const parse = (d: string): Date => {
     const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(d);
     if (!m) throw new Error(`dates must be YYYY-MM-DD, got "${d}"`);
-    return new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3]), 0, 0, 0, 0);
+    const [year, month, day] = [Number(m[1]), Number(m[2]), Number(m[3])];
+    const date = new Date(year, month - 1, day, 0, 0, 0, 0);
+    // Round-trip: `new Date` silently rolls impossible dates (2026-02-30 -> Mar 2), so reject them.
+    if (date.getFullYear() !== year || date.getMonth() !== month - 1 || date.getDate() !== day) {
+      throw new Error(`dates must be real calendar dates, got "${d}"`);
+    }
+    return date;
   };
   const start = parse(startDate);
   const end = parse(endDate);

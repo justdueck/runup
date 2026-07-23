@@ -16,14 +16,9 @@ import {
   applyHostStyleVariables,
   type McpUiHostContext,
 } from "@modelcontextprotocol/ext-apps/app-with-deps";
+import { buildProfilePatch, MINIMUMS_FIELDS, type MinimumsKey } from "./profile-patch.js";
 
-interface MinimumsBlock {
-  ceilingFt: number;
-  visSm: number;
-  windKt: number;
-  gustSpreadKt: number;
-  crosswindKt: number;
-}
+type MinimumsBlock = Record<MinimumsKey, number>;
 
 interface ProfileView {
   /** Home airports, ICAO/FAA ids; index 0 is the primary field. */
@@ -32,14 +27,6 @@ interface ProfileView {
   minimums: { day: MinimumsBlock; night: MinimumsBlock };
   preferences: { maxDistanceNm: number; budgetPerFlightUsd: number; typicalFlightKinds: string[] };
 }
-
-const LIMIT_FIELDS: Array<{ key: keyof MinimumsBlock; label: string }> = [
-  { key: "ceilingFt", label: "Ceiling (ft, min)" },
-  { key: "visSm", label: "Visibility (SM, min)" },
-  { key: "windKt", label: "Wind (kt, max)" },
-  { key: "gustSpreadKt", label: "Gust spread (kt, max)" },
-  { key: "crosswindKt", label: "Crosswind (kt, max)" },
-];
 
 const form = document.getElementById("profile-form") as HTMLFormElement;
 const statusEl = document.getElementById("status") as HTMLElement;
@@ -105,13 +92,14 @@ app.connect().then(() => {
 function buildLimitInputs(block: "day" | "night"): void {
   const container = form.querySelector(`[data-block="${block}"]`) as HTMLElement;
   container.replaceChildren(
-    ...LIMIT_FIELDS.map((f) => {
+    ...MINIMUMS_FIELDS.map((f) => {
       const label = document.createElement("label");
       label.textContent = f.label;
       const input = document.createElement("input");
       input.type = "number";
       input.min = "0";
-      input.step = "1";
+      // Visibility takes fractional statute miles; knots and feet stay whole numbers.
+      input.step = f.step;
       input.name = `minimums.${block}.${f.key}`;
       label.appendChild(input);
       return label;
@@ -124,7 +112,7 @@ function render(profile: ProfileView): void {
   setValue("preferences.maxDistanceNm", profile.preferences.maxDistanceNm);
   setValue("preferences.budgetPerFlightUsd", profile.preferences.budgetPerFlightUsd);
   for (const block of ["day", "night"] as const) {
-    for (const f of LIMIT_FIELDS) {
+    for (const f of MINIMUMS_FIELDS) {
       setValue(`minimums.${block}.${f.key}`, profile.minimums[block][f.key]);
     }
   }
@@ -139,29 +127,16 @@ function render(profile: ProfileView): void {
   subtitleEl.textContent = `Home ${profile.homeAirports.join(" / ")} - typical: ${profile.preferences.typicalFlightKinds.join(", ")}`;
 }
 
+/**
+ * Form -> update_profile patch. Cleared numeric fields are omitted from the
+ * patch (leave unchanged on the server) instead of being sent as 0.
+ */
 function collectPatch(): Record<string, unknown> {
   const data = new FormData(form);
-  const num = (name: string): number => Number(data.get(name));
-  const block = (b: "day" | "night"): MinimumsBlock => ({
-    ceilingFt: num(`minimums.${b}.ceilingFt`),
-    visSm: num(`minimums.${b}.visSm`),
-    windKt: num(`minimums.${b}.windKt`),
-    gustSpreadKt: num(`minimums.${b}.gustSpreadKt`),
-    crosswindKt: num(`minimums.${b}.crosswindKt`),
+  return buildProfilePatch((name) => {
+    const value = data.get(name);
+    return value === null ? null : String(value);
   });
-  // Home airports: comma/space separated ids -> uppercase array (replaces the whole list).
-  const homeAirports = String(data.get("homeAirports") ?? "")
-    .split(/[\s,]+/)
-    .map((id) => id.trim().toUpperCase())
-    .filter((id) => id.length > 0);
-  return {
-    homeAirports,
-    minimums: { day: block("day"), night: block("night") },
-    preferences: {
-      maxDistanceNm: num("preferences.maxDistanceNm"),
-      budgetPerFlightUsd: num("preferences.budgetPerFlightUsd"),
-    },
-  };
 }
 
 function setValue(name: string, value: string | number): void {

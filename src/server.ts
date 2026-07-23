@@ -26,13 +26,48 @@ import { FixtureCalendarProvider } from "./providers/calendar.js";
 import { FixtureAvailabilityProvider } from "./providers/availability.js";
 import { NaiveRoutePlanner } from "./providers/routes.js";
 import type { Providers } from "./providers/types.js";
-import { makeWindow } from "./types.js";
+import { makeWindow, type TimeWindow } from "./types.js";
 
 export const SERVER_NAME = "runup";
 export const SERVER_VERSION = "0.1.0";
 
 /** URI of the profile & minimums form (MCP Apps View). */
 export const PROFILE_UI_URI = "ui://runup/profile-form.html";
+
+/**
+ * ISO-8601 date-time ("Z", ±HH:MM offset, or local time), calendar-aware
+ * (rejects 2026-02-30). Enforced by a refinement so the schema published to
+ * the model stays a plain string with a `format` hint rather than a regex.
+ */
+const IsoDateTimePattern = z.iso.datetime({ offset: true, local: true });
+export const IsoTimestampSchema = z.string().refine((s) => IsoDateTimePattern.safeParse(s).success, {
+  message: 'expected an ISO-8601 date-time such as "2026-07-25T16:00:00Z"',
+});
+
+/** Time-window input shared by the window tools: ISO-8601 `start`/`end`, start strictly before end. */
+export const TimeWindowInputSchema = z
+  .object({ start: IsoTimestampSchema, end: IsoTimestampSchema })
+  .refine(
+    (w) => {
+      const start = Date.parse(w.start);
+      const end = Date.parse(w.end);
+      // Ordering is only checked once both timestamps parse; malformed values carry their own issue.
+      return Number.isNaN(start) || Number.isNaN(end) || start < end;
+    },
+    { message: "window start must be before end", path: ["end"] },
+  );
+
+/** Model-facing field schemas for a window (validated in the handler via {@link TimeWindowInputSchema}). */
+const WINDOW_INPUT_SHAPE = {
+  start: z.string().meta({
+    description: 'Window start, ISO-8601 date-time (e.g. "2026-07-25T16:00:00Z" or with a UTC offset).',
+    format: "date-time",
+  }),
+  end: z.string().meta({
+    description: "Window end, ISO-8601 date-time; must be after `start`.",
+    format: "date-time",
+  }),
+};
 
 export interface ServerDeps {
   /** Path to profile.json (defaults to ${RUNUP_HOME:-~/.runup}/profile.json). */
@@ -194,14 +229,12 @@ export function createServer(deps: ServerDeps = {}): McpServer {
       description:
         "Check which aircraft tails at the flight school appear free for a time window (currently a fixture " +
         "provider; the school's scheduler is not wired up yet).",
-      inputSchema: {
-        start: z.string().describe("Window start, ISO 8601."),
-        end: z.string().describe("Window end, ISO 8601."),
-      },
+      inputSchema: WINDOW_INPUT_SHAPE,
     },
     async ({ start, end }): Promise<CallToolResult> => {
-      const window = makeWindow(new Date(start), new Date(end));
-      return jsonResult(await providers.availability.getAircraftAvailability(window));
+      const parsed = windowFromInput({ start, end });
+      if ("error" in parsed) return parsed.error;
+      return jsonResult(await providers.availability.getAircraftAvailability(parsed.window));
     },
   );
 
@@ -216,15 +249,16 @@ export function createServer(deps: ServerDeps = {}): McpServer {
         "the given window at the aircraft's cruise speed with fuel and time buffers, departing each of the " +
         "profile's home airports and using its max distance and budget. Aircraft comes from `tail` or the profile.",
       inputSchema: {
-        start: z.string().describe("Window start, ISO 8601."),
-        end: z.string().describe("Window end, ISO 8601."),
+        ...WINDOW_INPUT_SHAPE,
         tail: z.string().optional().describe("Tail number to plan with (must be in the profile for real numbers)."),
         maxCandidates: z.number().int().min(1).max(20).optional(),
       },
     },
     async ({ start, end, tail, maxCandidates }): Promise<CallToolResult> => {
+      const parsed = windowFromInput({ start, end });
+      if ("error" in parsed) return parsed.error;
+      const { window } = parsed;
       const profile = await loadProfile(profileFile);
-      const window = makeWindow(new Date(start), new Date(end));
       const { aircraft, notes } = resolveAircraftPerformance(profile, tail ? { tail } : {});
       const routes = await providers.routes.planRoutes(
         window,
@@ -283,6 +317,25 @@ export function jsonResult(payload: unknown): CallToolResult {
     content: [{ type: "text", text: JSON.stringify(payload, null, 2) }],
     structuredContent,
   };
+}
+
+/** Friendly tool error result (isError: true) for invalid input. */
+export function errorResult(message: string): CallToolResult {
+  return { content: [{ type: "text", text: message }], isError: true };
+}
+
+/** Validate window inputs and build the window, or a friendly error result on bad input. */
+function windowFromInput(input: { start: string; end: string }): { window: TimeWindow } | { error: CallToolResult } {
+  const parsed = TimeWindowInputSchema.safeParse(input);
+  if (!parsed.success) return { error: errorResult(`Invalid time window: ${formatIssues(parsed.error)}`) };
+  return { window: makeWindow(new Date(parsed.data.start), new Date(parsed.data.end)) };
+}
+
+/** One-line summary of zod issues, e.g. "start: expected an ISO-8601 date-time ...; end: ...". */
+function formatIssues(error: z.ZodError): string {
+  return error.issues
+    .map((issue) => (issue.path.length > 0 ? `${issue.path.join(".")}: ${issue.message}` : issue.message))
+    .join("; ");
 }
 
 /** Default UI loader: dist/ui/profile-form.html next to the compiled server, with a graceful fallback. */

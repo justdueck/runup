@@ -25,6 +25,11 @@ const EXPECTED_TOOLS = [
 let dir: string;
 let client: Client;
 
+/** First text content of a tool result (where friendly error messages land). */
+function firstText(result: unknown): string | undefined {
+  return (result as { content?: Array<{ type: string; text?: string }> }).content?.find((c) => c.type === "text")?.text;
+}
+
 beforeEach(async () => {
   dir = await mkdtemp(path.join(os.tmpdir(), "runup-server-"));
   const morning = makeWindow(new Date(2026, 6, 25, 9, 0), new Date(2026, 6, 25, 12, 30), "morning");
@@ -130,6 +135,52 @@ describe("runup MCP server", () => {
     expect(byAirport.KPAE.score?.verdict).toBe("go");
     expect(byAirport.KTIW.score?.verdict).toBe("no-go"); // BKN015 below the day ceiling minimum
     expect(payload.notes.join(" ")).toMatch(/home airports/);
+  });
+
+  it("get_aircraft_availability validates the window and returns free tails", async () => {
+    const ok = await client.callTool({
+      name: "get_aircraft_availability",
+      arguments: { start: "2026-07-25T16:00:00Z", end: "2026-07-25T19:30:00Z" },
+    });
+    expect(ok.isError).toBeFalsy();
+    expect((ok.structuredContent as { availableTails: string[] }).availableTails).toEqual(["N12345", "N678SP"]);
+
+    const reversed = await client.callTool({
+      name: "get_aircraft_availability",
+      arguments: { start: "2026-07-25T19:30:00Z", end: "2026-07-25T16:00:00Z" },
+    });
+    expect(reversed.isError).toBe(true);
+    expect(firstText(reversed)).toMatch(/start must be before end/);
+
+    const notATimestamp = await client.callTool({
+      name: "get_aircraft_availability",
+      arguments: { start: "tomorrow morning", end: "2026-07-25T19:30:00Z" },
+    });
+    expect(notATimestamp.isError).toBe(true);
+    expect(firstText(notATimestamp)).toMatch(/start: expected an ISO-8601 date-time/);
+  });
+
+  it("plan_routes rejects impossible dates and empty windows but accepts offset timestamps", async () => {
+    const impossible = await client.callTool({
+      name: "plan_routes",
+      arguments: { start: "2026-02-30T09:00:00Z", end: "2026-02-30T12:00:00Z" }, // Feb 30 does not exist
+    });
+    expect(impossible.isError).toBe(true);
+    expect(firstText(impossible)).toMatch(/ISO-8601/);
+
+    const empty = await client.callTool({
+      name: "plan_routes",
+      arguments: { start: "2026-07-25T16:00:00Z", end: "2026-07-25T16:00:00Z" },
+    });
+    expect(empty.isError).toBe(true);
+    expect(firstText(empty)).toMatch(/before end/);
+
+    const ok = await client.callTool({
+      name: "plan_routes",
+      arguments: { start: "2026-07-25T09:00:00-07:00", end: "2026-07-25T12:30:00-07:00" },
+    });
+    expect(ok.isError).toBeFalsy();
+    expect((ok.structuredContent as { routes: unknown[] }).routes.length).toBeGreaterThan(0);
   });
 
   it("plan_day composes the full picture", async () => {

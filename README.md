@@ -135,8 +135,10 @@ tests/                vitest suites + recorded-shape weather fixtures
 
 - **Calendar source** — `FixtureCalendarProvider` only; Google Calendar
   (freebusy + OAuth, token in keychain) is a TODO.
-- **Scheduler provider** — the school's system is unknown;
-  `SchedulerBrowserProvider` is an empty stub earmarked for Playwright.
+- **Aircraft availability (NeedleNine)** — `NeedleNineProvider` is a stub.
+  NeedleNine has no public API; the plan is to authenticate against the
+  portal's JSON backend and reuse the schedule endpoints it calls (Playwright
+  grid-reading as a fallback), with credentials in the OS keychain.
 - **Real airport data** — `src/data/airports.json` is a hand-maintained
   16-airport Puget Sound / Pacific Northwest placeholder set (coordinates and
   elevations transcribed from public sources noted per airport, no runway

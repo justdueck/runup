@@ -3,6 +3,7 @@ import {
   ceilingFromClouds,
   crosswindComponents,
   flightCategory,
+  NodeFetcher,
   parseFractionalNumber,
   parseVisibilitySm,
   summarizeMetar,
@@ -118,6 +119,35 @@ describe("summarizeMetar (fixtures)", () => {
     expect(fetcher.requestedUrls[0]).toContain("/metar?");
     expect(fetcher.requestedUrls[0]).toContain("ids=KPAE");
     expect(fetcher.requestedUrls[0]).toContain("format=json");
+  });
+});
+
+describe("NodeFetcher", () => {
+  it("aborts a hung request after the configured timeout with a clean error", async () => {
+    // A fetch that never resolves on its own; it only rejects when the timeout aborts it.
+    const hangingFetch: typeof fetch = (_input, init) =>
+      new Promise((_resolve, reject) => {
+        init?.signal?.addEventListener("abort", () => reject(init.signal!.reason));
+      });
+    const fetcher = new NodeFetcher({ timeoutMs: 20, fetchImpl: hangingFetch });
+    await expect(fetcher.getJson("https://example.invalid/metar?ids=KPAE")).rejects.toThrow(
+      /timed out after 20 ms/,
+    );
+  });
+
+  it("parses JSON (and empty bodies) from the injected fetch", async () => {
+    const seen: Array<{ url: string; init?: RequestInit }> = [];
+    const fakeFetch: typeof fetch = async (input, init) => {
+      seen.push({ url: String(input), init });
+      const body = seen.length === 1 ? '[{"icaoId":"KPAE"}]' : "";
+      return new Response(body, { status: 200 });
+    };
+    const fetcher = new NodeFetcher({ fetchImpl: fakeFetch });
+    await expect(fetcher.getJson("https://example.invalid/a")).resolves.toEqual([{ icaoId: "KPAE" }]);
+    await expect(fetcher.getJson("https://example.invalid/b")).resolves.toEqual([]); // empty body -> []
+    expect(seen).toHaveLength(2);
+    expect(new Headers(seen[0].init?.headers).get("Accept")).toBe("application/json");
+    expect(seen[0].init?.signal).toBeInstanceOf(AbortSignal); // timeout signal is always attached
   });
 });
 
