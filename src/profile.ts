@@ -183,14 +183,56 @@ export function validateProfile(input: unknown): Profile {
   return result.data;
 }
 
-/** Validate then persist the profile (pretty JSON, atomic-ish write). */
+/** Validate then persist the profile (pretty JSON, atomic write, serialized per file). */
 export async function saveProfile(profile: Profile, filePath: string = profilePath()): Promise<Profile> {
+  return enqueueSave(filePath, () => writeProfileFile(profile, filePath));
+}
+
+/**
+ * Validate and atomically write the profile: pretty JSON to a unique temp
+ * file, then rename over `filePath` so readers never see a partial write.
+ * Callers must hold the file's save queue ({@link enqueueSave}).
+ */
+async function writeProfileFile(profile: Profile, filePath: string): Promise<Profile> {
   const valid = validateProfile(profile);
   await fs.mkdir(path.dirname(filePath), { recursive: true });
-  const tmp = `${filePath}.tmp-${process.pid}`;
-  await fs.writeFile(tmp, `${JSON.stringify(valid, null, 2)}\n`, "utf8");
-  await fs.rename(tmp, filePath);
+  const tmp = `${filePath}.tmp-${process.pid}-${nextTmpId()}`;
+  try {
+    await fs.writeFile(tmp, `${JSON.stringify(valid, null, 2)}\n`, "utf8");
+    await fs.rename(tmp, filePath);
+  } catch (err) {
+    await fs.rm(tmp, { force: true }).catch(() => {});
+    throw err;
+  }
   return valid;
+}
+
+/** Monotonic per-process counter so overlapping saves never share a temp filename. */
+let tmpCounter = 0;
+function nextTmpId(): number {
+  tmpCounter += 1;
+  return tmpCounter;
+}
+
+/**
+ * Per-file save queues. `patchProfile` is a read-modify-write, so without
+ * serialization two overlapping `update_profile` calls could both read the
+ * same starting profile and the later write would silently drop the earlier
+ * patch. Tasks run strictly in submission order; a failed task does not
+ * poison the queue for later ones.
+ */
+const saveQueues = new Map<string, Promise<unknown>>();
+
+function enqueueSave<T>(filePath: string, task: () => Promise<T>): Promise<T> {
+  const key = path.resolve(filePath);
+  const previous = saveQueues.get(key) ?? Promise.resolve();
+  const run = previous.then(task, task);
+  saveQueues.set(key, run);
+  const settled = (): void => {
+    if (saveQueues.get(key) === run) saveQueues.delete(key);
+  };
+  run.then(settled, settled);
+  return run;
 }
 
 /**
@@ -203,11 +245,17 @@ export function applyProfilePatch(profile: Profile, patch: ProfilePatch): Profil
   return validateProfile(merged);
 }
 
-/** Load, patch, save, and return the updated profile. */
+/**
+ * Load, patch, save, and return the updated profile. The whole
+ * read-modify-write runs in the file's save queue, so overlapping calls
+ * apply in order and both patches persist.
+ */
 export async function patchProfile(patch: ProfilePatch, filePath: string = profilePath()): Promise<Profile> {
-  const current = await loadProfile(filePath);
-  const next = applyProfilePatch(current, patch);
-  return saveProfile(next, filePath);
+  return enqueueSave(filePath, async () => {
+    const current = await loadProfile(filePath);
+    const next = applyProfilePatch(current, patch);
+    return writeProfileFile(next, filePath);
+  });
 }
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
@@ -234,8 +282,8 @@ function deepMerge(base: Record<string, unknown>, patch: Record<string, unknown>
  * The plan is to keep them in the OS keychain — macOS Keychain via the
  * `security` CLI / Keychain Services, Windows Credential Manager, or
  * libsecret on Linux (a small cross-platform module such as `keytar` or the
- * platform CLIs). The SchedulerBrowserProvider will call this to fetch a
- * username/password (or session cookie) at runtime.
+ * platform CLIs). The NeedleNineProvider will call this to fetch the
+ * NeedleNine portal email/password (or a session token) at runtime.
  */
 export async function getSchedulerCredentials(): Promise<never> {
   throw new Error(

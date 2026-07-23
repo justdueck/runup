@@ -17,24 +17,55 @@ import { round1 } from "./util.js";
 export const AWC_BASE_URL = "https://aviationweather.gov/api/data";
 const USER_AGENT = "runup/0.1 (personal flight planning tool)";
 
+/** Default per-request timeout for aviationweather.gov (ms). */
+export const DEFAULT_FETCH_TIMEOUT_MS = 10_000;
+
 /** Minimal JSON GET abstraction so tests can inject fixtures. */
 export interface HttpJsonFetcher {
   getJson(url: string): Promise<unknown>;
 }
 
-/** Default fetcher using Node's global fetch. */
+export interface NodeFetcherOptions {
+  /** Abort the request after this many milliseconds (default {@link DEFAULT_FETCH_TIMEOUT_MS}). */
+  timeoutMs?: number;
+  /** Injectable fetch implementation (tests); defaults to Node's global fetch. */
+  fetchImpl?: typeof fetch;
+}
+
+/** Default fetcher using Node's global fetch, with a request timeout. */
 export class NodeFetcher implements HttpJsonFetcher {
-  async getJson(url: string): Promise<unknown> {
-    const res = await fetch(url, {
-      headers: { Accept: "application/json", "User-Agent": USER_AGENT },
-    });
-    if (!res.ok) {
-      throw new Error(`aviationweather.gov request failed: ${res.status} ${res.statusText} for ${url}`);
-    }
-    const text = await res.text();
-    // The API returns an empty body (not "[]") when no reports match.
-    return text.trim().length === 0 ? [] : JSON.parse(text);
+  private readonly timeoutMs: number;
+  private readonly fetchImpl: typeof fetch;
+
+  constructor(opts: NodeFetcherOptions = {}) {
+    this.timeoutMs = opts.timeoutMs ?? DEFAULT_FETCH_TIMEOUT_MS;
+    this.fetchImpl = opts.fetchImpl ?? ((input, init) => fetch(input, init));
   }
+
+  async getJson(url: string): Promise<unknown> {
+    try {
+      const res = await this.fetchImpl(url, {
+        headers: { Accept: "application/json", "User-Agent": USER_AGENT },
+        signal: AbortSignal.timeout(this.timeoutMs),
+      });
+      if (!res.ok) {
+        throw new Error(`aviationweather.gov request failed: ${res.status} ${res.statusText} for ${url}`);
+      }
+      const text = await res.text();
+      // The API returns an empty body (not "[]") when no reports match.
+      return text.trim().length === 0 ? [] : JSON.parse(text);
+    } catch (err) {
+      if (isTimeoutError(err)) {
+        throw new Error(`aviationweather.gov request timed out after ${this.timeoutMs} ms for ${url}`);
+      }
+      throw err;
+    }
+  }
+}
+
+/** True for the abort raised by an expired AbortSignal.timeout() (or an aborted request). */
+function isTimeoutError(err: unknown): boolean {
+  return err instanceof Error && (err.name === "TimeoutError" || err.name === "AbortError");
 }
 
 // --- Schemas (tolerant) ----------------------------------------------------

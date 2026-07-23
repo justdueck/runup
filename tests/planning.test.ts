@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { dayRange, GENERIC_AIRCRAFT, planDay, resolveAircraftPerformance } from "../src/planning.js";
+import { dateSpan, dayRange, GENERIC_AIRCRAFT, planDay, resolveAircraftPerformance } from "../src/planning.js";
 import { defaultProfile, type Profile } from "../src/profile.js";
 import { FixtureCalendarProvider } from "../src/providers/calendar.js";
 import { FixtureAvailabilityProvider } from "../src/providers/availability.js";
@@ -95,5 +95,15 @@ describe("planDay", () => {
     expect(() => dayRange("2026/07/25")).toThrow(/YYYY-MM-DD/);
     const r = dayRange("2026-07-25");
     expect(Date.parse(r.end) - Date.parse(r.start)).toBe(24 * 3_600_000);
+  });
+
+  it("rejects impossible calendar dates instead of rolling them over", () => {
+    expect(() => dayRange("2026-02-30")).toThrow(/real calendar date/); // no Feb 30
+    expect(() => dayRange("2026-04-31")).toThrow(/real calendar date/); // April has 30 days
+    expect(() => dayRange("2026-13-01")).toThrow(/real calendar date/); // no month 13
+    expect(() => dayRange("2026-00-10")).toThrow(/real calendar date/); // no month 0
+    expect(() => dayRange("2026-02-29")).toThrow(/real calendar date/); // 2026 is not a leap year
+    expect(() => dayRange("2028-02-29")).not.toThrow(); // 2028 is
+    expect(() => dateSpan("2026-07-25", "2026-06-31")).toThrow(/real calendar date/); // end date checked too
   });
 });
