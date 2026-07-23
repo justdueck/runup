@@ -1,0 +1,128 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="color-scheme" content="light dark">
+  <title>Runup - Profile &amp; Minimums</title>
+  <style>
+    :root {
+      color-scheme: light dark;
+      --fp-bg: var(--color-background-primary, #ffffff);
+      --fp-bg-2: var(--color-background-secondary, #f4f5f7);
+      --fp-fg: var(--color-text-primary, #1c1c1e);
+      --fp-fg-2: var(--color-text-secondary, #5c5c60);
+      --fp-border: var(--color-border-primary, #d0d0d5);
+      --fp-radius: var(--border-radius-md, 8px);
+      --fp-font: var(--font-sans, system-ui, -apple-system, "Segoe UI", sans-serif);
+      --fp-mono: var(--font-mono, ui-monospace, "SF Mono", Menlo, monospace);
+      --fp-danger: var(--color-text-danger, #b3261e);
+      --fp-success: var(--color-text-success, #1e7f34);
+    }
+    @media (prefers-color-scheme: dark) {
+      :root {
+        --fp-bg: var(--color-background-primary, #1c1c1e);
+        --fp-bg-2: var(--color-background-secondary, #2c2c2e);
+        --fp-fg: var(--color-text-primary, #f5f5f7);
+        --fp-fg-2: var(--color-text-secondary, #b9b9be);
+        --fp-border: var(--color-border-primary, #48484a);
+      }
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      padding: 12px;
+      background: var(--fp-bg);
+      color: var(--fp-fg);
+      font-family: var(--fp-font);
+      font-size: 14px;
+      line-height: 1.4;
+    }
+    h1 { font-size: 16px; margin: 0 0 4px; }
+    h2 { font-size: 13px; margin: 0 0 8px; text-transform: uppercase; letter-spacing: .04em; color: var(--fp-fg-2); }
+    .subtle { color: var(--fp-fg-2); font-size: 12px; margin: 0 0 12px; }
+    fieldset {
+      border: 1px solid var(--fp-border);
+      border-radius: var(--fp-radius);
+      background: var(--fp-bg-2);
+      padding: 10px 12px 12px;
+      margin: 0 0 12px;
+    }
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+      gap: 8px 12px;
+    }
+    label { display: flex; flex-direction: column; gap: 3px; font-size: 12px; color: var(--fp-fg-2); }
+    input {
+      font: inherit;
+      color: var(--fp-fg);
+      background: var(--fp-bg);
+      border: 1px solid var(--fp-border);
+      border-radius: calc(var(--fp-radius) - 2px);
+      padding: 5px 7px;
+      width: 100%;
+    }
+    input:focus { outline: 2px solid var(--color-ring-primary, #0a84ff); outline-offset: 1px; }
+    ul { margin: 0; padding-left: 18px; font-family: var(--fp-mono); font-size: 12px; }
+    .actions { display: flex; align-items: center; gap: 12px; margin-top: 4px; }
+    button {
+      font: inherit;
+      padding: 6px 14px;
+      border-radius: var(--fp-radius);
+      border: 1px solid var(--fp-border);
+      background: var(--fp-fg);
+      color: var(--fp-bg);
+      cursor: pointer;
+    }
+    button:disabled { opacity: .6; cursor: progress; }
+    #status { font-size: 12px; color: var(--fp-fg-2); }
+    #status.ok { color: var(--fp-success); }
+    #status.err { color: var(--fp-danger); }
+  </style>
+</head>
+<body>
+  <main id="main">
+    <h1>Pilot profile &amp; personal minimums</h1>
+    <p class="subtle" id="subtitle">Loading profile...</p>
+
+    <form id="profile-form">
+      <fieldset>
+        <h2>Home base</h2>
+        <div class="grid">
+          <label>Home airports (ICAO ids, comma-separated - first is primary)
+            <input type="text" name="homeAirports" autocomplete="off" spellcheck="false" placeholder="KPAE, KTIW">
+          </label>
+          <label>Max round-trip distance (NM)
+            <input type="number" name="preferences.maxDistanceNm" min="1" step="1">
+          </label>
+          <label>Budget per flight (USD)
+            <input type="number" name="preferences.budgetPerFlightUsd" min="1" step="1">
+          </label>
+        </div>
+      </fieldset>
+
+      <fieldset>
+        <h2>Day minimums</h2>
+        <div class="grid" data-block="day"></div>
+      </fieldset>
+
+      <fieldset>
+        <h2>Night minimums</h2>
+        <div class="grid" data-block="night"></div>
+      </fieldset>
+
+      <fieldset>
+        <h2>Aircraft (edit via chat / update_profile)</h2>
+        <ul id="aircraft-list"><li>none</li></ul>
+      </fieldset>
+
+      <div class="actions">
+        <button type="submit" id="save-btn">Save minimums</button>
+        <span id="status" role="status" aria-live="polite"></span>
+      </div>
+    </form>
+  </main>
+  <!-- APP_SCRIPT -->
+</body>
+</html>

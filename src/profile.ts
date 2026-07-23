@@ -1,0 +1,244 @@
+/**
+ * Pilot profile & personal minimums store.
+ *
+ * Persists a single JSON document at:
+ *   ${RUNUP_HOME:-~/.runup}/profile.json
+ *
+ * The profile deliberately contains NO secrets. Scheduler/flight-school
+ * credentials must never be written here — see the TODO stub at the bottom
+ * of this file for the intended OS-keychain approach.
+ */
+import { promises as fs } from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import { z } from "zod";
+
+export const PROFILE_SCHEMA_VERSION = 1 as const;
+
+/** ICAO / FAA identifier, e.g. "KPAE" or "S43" (normalized to uppercase). */
+export const AirportIdSchema = z
+  .string()
+  .trim()
+  .toUpperCase()
+  .regex(/^[A-Za-z0-9]{3,4}$/, { message: "expected a 3-4 character airport identifier (e.g. KPAE)" });
+
+/**
+ * The pilot's home airports (ICAO/FAA ids). At least one; order matters:
+ * the first entry is the primary field. Patches replace the whole list.
+ */
+export const HomeAirportsSchema = z
+  .array(AirportIdSchema)
+  .min(1, { message: "at least one home airport is required" });
+
+export const MinimumsBlockSchema = z.object({
+  /** Lowest ceiling (ft AGL) the pilot will fly under. */
+  ceilingFt: z.number().nonnegative(),
+  /** Lowest visibility (statute miles). */
+  visSm: z.number().nonnegative(),
+  /** Max steady surface wind (kt). */
+  windKt: z.number().nonnegative(),
+  /** Max gust spread, i.e. gust minus steady wind (kt). */
+  gustSpreadKt: z.number().nonnegative(),
+  /** Max crosswind component on the runway in use (kt). */
+  crosswindKt: z.number().nonnegative(),
+});
+export type MinimumsBlock = z.infer<typeof MinimumsBlockSchema>;
+
+export const PersonalMinimumsSchema = z.object({
+  day: MinimumsBlockSchema,
+  night: MinimumsBlockSchema,
+});
+export type PersonalMinimums = z.infer<typeof PersonalMinimumsSchema>;
+
+export const AircraftSchema = z.object({
+  tail: z.string().trim().min(1),
+  type: z.string().trim().min(1),
+  /** Whether the pilot is currently checked out in this tail/type at the school. */
+  checkedOut: z.boolean(),
+  cruiseKtas: z.number().positive(),
+  fuelBurnGph: z.number().positive(),
+  usableFuelGal: z.number().positive(),
+  notes: z.string().optional(),
+});
+export type Aircraft = z.infer<typeof AircraftSchema>;
+
+export const CurrencyGoalsSchema = z.object({
+  nightLandings: z.boolean(),
+  ifrApproaches: z.boolean(),
+  passengerCurrency: z.boolean(),
+  notes: z.string().optional(),
+});
+export type CurrencyGoals = z.infer<typeof CurrencyGoalsSchema>;
+
+export const PreferencesSchema = z.object({
+  /** e.g. "local practice", "cross-country", "food run". */
+  typicalFlightKinds: z.array(z.string().trim().min(1)),
+  /** Round-trip planning cap in nautical miles. */
+  maxDistanceNm: z.number().positive(),
+  budgetPerFlightUsd: z.number().positive(),
+});
+export type Preferences = z.infer<typeof PreferencesSchema>;
+
+export const ProfileSchema = z.object({
+  schemaVersion: z.literal(PROFILE_SCHEMA_VERSION),
+  homeAirports: HomeAirportsSchema,
+  aircraft: z.array(AircraftSchema),
+  minimums: PersonalMinimumsSchema,
+  currencyGoals: CurrencyGoalsSchema,
+  preferences: PreferencesSchema,
+});
+export type Profile = z.infer<typeof ProfileSchema>;
+
+/**
+ * Patch shape accepted by `update_profile`: every section optional, minimums
+ * blocks individually partial. `schemaVersion` is intentionally not patchable.
+ * Arrays (`homeAirports`, `aircraft`), when present, replace the whole list
+ * (simplest predictable rule).
+ */
+export const ProfilePatchSchema = z
+  .object({
+    homeAirports: HomeAirportsSchema.optional(),
+    aircraft: z.array(AircraftSchema).optional(),
+    minimums: z
+      .object({
+        day: MinimumsBlockSchema.partial().optional(),
+        night: MinimumsBlockSchema.partial().optional(),
+      })
+      .optional(),
+    currencyGoals: CurrencyGoalsSchema.partial().optional(),
+    preferences: PreferencesSchema.partial().optional(),
+  })
+  .strict();
+export type ProfilePatch = z.infer<typeof ProfilePatchSchema>;
+
+/** Sensible starter values; placeholders the pilot should personalize. */
+export function defaultProfile(): Profile {
+  return {
+    schemaVersion: PROFILE_SCHEMA_VERSION,
+    // First entry is the primary field. KPAE = Paine Field (Everett, WA),
+    // KTIW = Tacoma Narrows (WA).
+    homeAirports: ["KPAE", "KTIW"],
+    aircraft: [],
+    minimums: {
+      day: { ceilingFt: 3000, visSm: 5, windKt: 20, gustSpreadKt: 10, crosswindKt: 8 },
+      night: { ceilingFt: 5000, visSm: 7, windKt: 15, gustSpreadKt: 8, crosswindKt: 6 },
+    },
+    currencyGoals: {
+      nightLandings: true,
+      ifrApproaches: false,
+      passengerCurrency: true,
+      notes: "Keep passenger (3 T/O + landings in 90 days) and night currency.",
+    },
+    preferences: {
+      typicalFlightKinds: ["local practice", "cross-country", "food run"],
+      maxDistanceNm: 250,
+      budgetPerFlightUsd: 300,
+    },
+  };
+}
+
+export class ProfileValidationError extends Error {
+  constructor(message: string, readonly issues: string[]) {
+    super(message);
+    this.name = "ProfileValidationError";
+  }
+}
+
+/** Directory holding profile.json (env override: RUNUP_HOME). */
+export function profileHomeDir(env: NodeJS.ProcessEnv = process.env): string {
+  const configured = env.RUNUP_HOME;
+  if (configured && configured.trim().length > 0) return configured;
+  return path.join(os.homedir(), ".runup");
+}
+
+export function profilePath(env: NodeJS.ProcessEnv = process.env): string {
+  return path.join(profileHomeDir(env), "profile.json");
+}
+
+/** Load the profile; returns defaults when the file does not exist yet. */
+export async function loadProfile(filePath: string = profilePath()): Promise<Profile> {
+  let raw: string;
+  try {
+    raw = await fs.readFile(filePath, "utf8");
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === "ENOENT") return defaultProfile();
+    throw err;
+  }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch (err) {
+    throw new ProfileValidationError(`profile.json is not valid JSON: ${(err as Error).message}`, []);
+  }
+  return validateProfile(parsed);
+}
+
+/** Validate arbitrary input against the profile schema (throws ProfileValidationError). */
+export function validateProfile(input: unknown): Profile {
+  const result = ProfileSchema.safeParse(input);
+  if (!result.success) {
+    const issues = result.error.issues.map((i) => `${i.path.join(".") || "<root>"}: ${i.message}`);
+    throw new ProfileValidationError("profile failed schema validation", issues);
+  }
+  return result.data;
+}
+
+/** Validate then persist the profile (pretty JSON, atomic-ish write). */
+export async function saveProfile(profile: Profile, filePath: string = profilePath()): Promise<Profile> {
+  const valid = validateProfile(profile);
+  await fs.mkdir(path.dirname(filePath), { recursive: true });
+  const tmp = `${filePath}.tmp-${process.pid}`;
+  await fs.writeFile(tmp, `${JSON.stringify(valid, null, 2)}\n`, "utf8");
+  await fs.rename(tmp, filePath);
+  return valid;
+}
+
+/**
+ * Pure merge of a patch onto a profile: objects merge recursively, arrays and
+ * scalars are replaced. Result is re-validated.
+ */
+export function applyProfilePatch(profile: Profile, patch: ProfilePatch): Profile {
+  const cleanPatch = ProfilePatchSchema.parse(patch);
+  const merged = deepMerge(structuredClone(profile) as Record<string, unknown>, cleanPatch as Record<string, unknown>);
+  return validateProfile(merged);
+}
+
+/** Load, patch, save, and return the updated profile. */
+export async function patchProfile(patch: ProfilePatch, filePath: string = profilePath()): Promise<Profile> {
+  const current = await loadProfile(filePath);
+  const next = applyProfilePatch(current, patch);
+  return saveProfile(next, filePath);
+}
+
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function deepMerge(base: Record<string, unknown>, patch: Record<string, unknown>): Record<string, unknown> {
+  for (const [key, value] of Object.entries(patch)) {
+    if (value === undefined) continue;
+    if (isPlainObject(value) && isPlainObject(base[key])) {
+      base[key] = deepMerge(base[key] as Record<string, unknown>, value);
+    } else {
+      base[key] = value;
+    }
+  }
+  return base;
+}
+
+/**
+ * TODO(credentials): flight-school scheduler credentials.
+ *
+ * NOT implemented on purpose. Credentials must never be stored in
+ * profile.json (that file is plain text, meant to be readable/portable).
+ * The plan is to keep them in the OS keychain — macOS Keychain via the
+ * `security` CLI / Keychain Services, Windows Credential Manager, or
+ * libsecret on Linux (a small cross-platform module such as `keytar` or the
+ * platform CLIs). The SchedulerBrowserProvider will call this to fetch a
+ * username/password (or session cookie) at runtime.
+ */
+export async function getSchedulerCredentials(): Promise<never> {
+  throw new Error(
+    "Scheduler credential storage is not implemented yet: use the OS keychain, never profile.json.",
+  );
+}
