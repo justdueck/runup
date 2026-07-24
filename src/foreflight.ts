@@ -158,6 +158,11 @@ export async function exportForeflight(route: string[], opts: ForeflightExportOp
     );
   } else {
     const waypoints = resolved.map((r) => ({ identifier: r.id, lat: r.airport!.lat, lon: r.airport!.lon }));
+    if (opts.routeName && sanitizeFplName(opts.routeName).length > FPL_NAME_MAX) {
+      notes.push(
+        `Flight-plan name shortened to "${fplRouteName(opts.routeName)}" (Garmin route names are limited to ${FPL_NAME_MAX} characters).`,
+      );
+    }
     const xml = buildGarminFpl(waypoints, opts.routeName ? { routeName: opts.routeName } : {});
     const fileName = `${ids.join("-")}.fpl`;
     let savedTo: string | null = null;
@@ -180,10 +185,17 @@ export async function exportForeflight(route: string[], opts: ForeflightExportOp
   return { route: routeString(ids), waypoints: ids, openUrl: foreflightMapsUrl(ids), fpl, notes };
 }
 
+/** Garmin route names allow at most this many characters. */
+const FPL_NAME_MAX = 25;
+
+/** Uppercase and strip to the alphanumerics/spaces Garmin route names allow (no length clamp). */
+function sanitizeFplName(name: string): string {
+  return name.toUpperCase().replace(/[^A-Z0-9 ]+/g, " ").replace(/\s+/g, " ").trim();
+}
+
 /** Garmin route names are short uppercase alphanumerics/spaces; clamp accordingly. */
 function fplRouteName(name: string): string {
-  const cleaned = name.toUpperCase().replace(/[^A-Z0-9 ]+/g, " ").replace(/\s+/g, " ").trim();
-  return (cleaned || "RUNUP ROUTE").slice(0, 25).trim();
+  return (sanitizeFplName(name) || "RUNUP ROUTE").slice(0, FPL_NAME_MAX).trim();
 }
 
 function escapeXml(s: string): string {

@@ -4,7 +4,8 @@ A personal flight-planning [MCP](https://modelcontextprotocol.io) server for a
 general-aviation renter pilot. From Claude Desktop / claude.ai it can:
 
 1. find free windows in your calendar,
-2. check which rental aircraft look available at the school,
+2. check which of your checked-out rental aircraft are actually free at the
+   school (live from the NeedleNine portal, or fixture data until you connect it),
 3. score current conditions against **your personal minimums** using free
    aviation weather (aviationweather.gov METAR/TAF),
 4. propose candidate out-and-back routes sized to a window,
@@ -16,9 +17,10 @@ across chats. Two of the tools also ship an **MCP Apps** View — an editable
 profile & minimums form that renders inline in hosts that support the
 MCP Apps extension.
 
-> Status: first scaffold. Calendar and aircraft availability are fixture
-> (canned) providers behind pluggable interfaces; the route planner uses a
-> small bundled Puget Sound airport sample (placeholder data). See
+> Status: calendar and routes are still fixture/naive providers behind
+> pluggable interfaces; aircraft availability is real once the NeedleNine
+> scheduler is configured (portal automation, read-only); the route planner
+> uses a small bundled Puget Sound airport sample (placeholder data). See
 > [Not yet implemented](#not-yet-implemented).
 
 ## Tools
@@ -29,7 +31,8 @@ MCP Apps extension.
 | `update_profile` *(UI)* | `patch` – partial profile (deep merge; arrays replace) | Updated profile, persisted to disk. |
 | `get_free_windows` | `startDate`, `endDate?` (YYYY-MM-DD), `minDurationHours?` | Free windows from the calendar provider. |
 | `get_conditions` | `airports?` (ICAO ids, 1–10; defaults to your home airports), `runwayHeadingDeg?`, `timeOfDay?` | Per-airport METAR summary (ceiling, vis, wind/gust, crosswind, flight category) + go/no-go score vs your minimums, plus TAF summaries. |
-| `get_aircraft_availability` | `start`, `end` (ISO) | Tails free for the window (fixture provider for now). |
+| `get_aircraft_availability` | `start`, `end` (ISO) | Tails free for the whole window, plus per-tail free intervals, the bookings/maintenance blocking each tail (no member identities), and airworthiness flags. NeedleNine when configured, fixture data otherwise. |
+| `get_scheduler_status` | – | Whether the NeedleNine scheduler is configured (email, portal, timezone), where credentials come from (macOS keychain / env — names only), whether a Playwright browser is installed, and setup steps. Never returns secrets. |
 | `plan_routes` | `start`, `end` (ISO), `tail?`, `maxCandidates?` | Out-and-back candidates departing each home airport whose round trip fits the window, plus a local-practice option per home field. |
 | `plan_day` | `date` (YYYY-MM-DD), `timeOfDay?`, `runwayHeadingDeg?`, `minWindowHours?` | Windows → availability → conditions (at every home airport) → routes in one structured result. |
 | `export_foreflight` | `route` (identifiers in flying order), `routeName?`, `save?` | ForeFlight handoff: a `foreflightmobile://` deep link that opens the route in ForeFlight, plus a Garmin `.fpl` file written to `${RUNUP_HOME}/exports/` for import. |
@@ -58,13 +61,74 @@ Stored at `${RUNUP_HOME:-~/.runup}/profile.json`
   },
   "currencyGoals": { "nightLandings": true, "ifrApproaches": false, "passengerCurrency": true, "notes": "" },
   "preferences": { "typicalFlightKinds": ["local practice", "cross-country", "food run"],
-                   "maxDistanceNm": 250, "budgetPerFlightUsd": 300 }
+                   "maxDistanceNm": 250, "budgetPerFlightUsd": 300 },
+  // Optional flight-school scheduler connection (NeedleNine). Email only — the
+  // password lives in the macOS keychain, never here.
+  "scheduler": { "provider": "needlenine", "email": "you@example.com" }
 }
 ```
 
-**No secrets in this file.** Flight-school scheduler credentials will live in
-the OS keychain (macOS Keychain / Windows Credential Manager / libsecret) —
-`getSchedulerCredentials()` in `src/profile.ts` is a documented TODO stub.
+**No secrets in this file.** The scheduler block carries only your NeedleNine
+login *email* (plus optional `portalUrl`, `timezone`, `tenantId` overrides). The
+password is read at runtime from the macOS keychain (service
+`runup-needlenine`, account = your email) or, off macOS, from the
+`RUNUP_NEEDLENINE_PASSWORD` environment variable — see
+`src/providers/needlenine/credentials.ts`.
+
+**Portal URL is allowlisted.** Because the profile can be edited from any
+chat (`update_profile`) and the login flow types your password into whatever
+page `portalUrl` points at, the profile only accepts https `needlenine.com`
+URLs, and the browser refuses to enter credentials on any other origin (e.g.
+after an unexpected redirect). To point at a staging or local mock portal,
+set the trusted `RUNUP_NEEDLENINE_PORTAL_URL` environment variable on the
+server instead.
+
+## Aircraft availability (NeedleNine)
+
+The flight school runs [NeedleNine](https://needlenine.com), which has no public
+API. `get_aircraft_availability` therefore drives the member portal the way you
+would: a headless Chromium (Playwright) logs into `portal.needlenine.com` as
+you, opens the reservation calendar for each local day the window spans, and
+reads the schedule and aircraft roster **that the page has already decrypted
+for display** (an init script observes the app's own `JSON.parse` calls and
+keeps only ids, times and status codes — no other members' names or emails
+ever leave the browser). The result is per checked-out tail: free
+sub-intervals, the bookings/maintenance blocks that break them up, and roster
+flags (open discrepancies, overdue dispatch-required maintenance). It is
+strictly **read-only**: it never clicks book, cancel or check-in, and it never
+stores anything from the portal on disk.
+
+All portal-specific knowledge (routes, login-form ids, the schedule's day
+controls, storage key names, payload field names) lives in one adapter,
+`src/providers/needlenine/site.ts`, so a portal redesign is a one-file fix.
+
+### First-run setup (macOS)
+
+```bash
+npm install                       # includes playwright
+npx playwright install chromium   # the browser binary (~100 MB, once)
+
+# Store your NeedleNine password in the login keychain
+# (prompts for the password; -w with no value keeps it off the command line):
+security add-generic-password -a "you@example.com" -s runup-needlenine -w
+```
+
+Then tell runup which account to use — from a chat, via `update_profile`:
+
+```json
+{ "patch": { "scheduler": { "provider": "needlenine", "email": "you@example.com" } } }
+```
+
+`get_scheduler_status` confirms the configuration and that Chromium is found.
+The first availability query logs into the portal as you (one session per
+running server, closed when the server exits). Non-macOS hosts can set
+`RUNUP_NEEDLENINE_EMAIL` / `RUNUP_NEEDLENINE_PASSWORD` in the server
+environment instead (less safe: the password sits in the process env). Other
+knobs: `RUNUP_CHROMIUM_PATH` (use an existing Chromium binary),
+`RUNUP_HEADLESS=0` (show the browser while debugging),
+`RUNUP_CHROMIUM_SANDBOX=1|0` (renderer sandbox; on by default on macOS), and
+the profile's `scheduler.timezone` (default `America/Los_Angeles`, the
+school's zone).
 
 ## ForeFlight handoff
 
@@ -119,7 +183,7 @@ text — UI is a progressive enhancement.
 ```bash
 npm install
 npm run build     # tsc + bundles the View into dist/ui/profile-form.html
-npm test          # vitest (fixtures only, no network)
+npm test          # vitest: unit tests + a Playwright run against a local mock portal (no network)
 npm start         # node dist/index.js (MCP over stdio)
 ```
 
@@ -144,7 +208,7 @@ protocol channel.
 
 ```
 src/
-  index.ts            stdio entry point
+  index.ts            stdio entry point (provider cleanup on exit)
   server.ts           tool + UI-resource registration (createServer)
   profile.ts          profile store, zod schema, defaults, patch merge
   weather.ts          aviationweather.gov client + METAR/TAF summaries
@@ -155,19 +219,26 @@ src/
   types.ts            shared domain types
   data/airports.json  small Puget Sound airport sample (placeholder; swap in FAA data)
   providers/          CalendarProvider, AvailabilityProvider, RoutePlanner + fixtures
+    needlenine/       NeedleNine scheduler: site adapter, Playwright session, availability math,
+                      keychain credentials, config/status
   ui/                 profile & minimums View (HTML template + App script)
 scripts/build-ui.mjs  esbuild bundling of the View into a single HTML file
 tests/                vitest suites + recorded-shape weather fixtures
+  needlenine/         availability math, capture-hook, credentials, provider, and e2e suites
+  mock-portal/        local NeedleNine-shaped portal used by the Playwright e2e test
 ```
 
 ## Not yet implemented
 
 - **Calendar source** — `FixtureCalendarProvider` only; Google Calendar
   (freebusy + OAuth, token in keychain) is a TODO.
-- **Aircraft availability (NeedleNine)** — `NeedleNineProvider` is a stub.
-  NeedleNine has no public API; the plan is to authenticate against the
-  portal's JSON backend and reuse the schedule endpoints it calls (Playwright
-  grid-reading as a fallback), with credentials in the OS keychain.
+- **NeedleNine, next steps** — the schedule is read a day at a time by
+  stepping the calendar (fine for windows within a couple of weeks); a
+  month-view fetch, the portal's own "check availability" endpoints, and the
+  DayPilot DOM fallback documented in `site.ts` are not implemented; the
+  tenant timezone is a profile setting rather than read from the portal; the
+  profile View form does not edit the scheduler block yet (use
+  `update_profile`).
 - **Real airport data** — `src/data/airports.json` is a hand-maintained
   16-airport Puget Sound / Pacific Northwest placeholder set (coordinates and
   elevations transcribed from public sources noted per airport, no runway
@@ -177,7 +248,6 @@ tests/                vitest suites + recorded-shape weather fixtures
   field; it does not yet know which field the aircraft is actually at.
 - **Forecast-aware scoring** — scoring uses the *current* METAR; matching
   TAF change groups to each future window is not done yet.
-- **Credentials** — OS keychain storage is a documented stub.
 - **Second View** — a "day plan" card for `plan_day` is the next UI candidate;
   only the profile & minimums form exists today.
 
@@ -186,6 +256,9 @@ tests/                vitest suites + recorded-shape weather fixtures
 - Weather fixtures in `tests/fixtures/` are hand-written in the documented
   aviationweather.gov JSON shape; record real responses once the server has
   network access.
+- The NeedleNine integration is personal-use, on-demand automation of your own
+  member login: low volume (a handful of page loads per query, cached for a
+  few minutes), read-only, and it discards other members' data at the source.
 - Distances/times are great-circle at cruise TAS with fixed allowances
   (`PLANNING_ALLOWANCES` in `src/providers/routes.ts`); no wind, terrain,
   airspace, or weight-and-balance. Planning aid only — you are PIC.

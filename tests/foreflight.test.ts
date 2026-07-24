@@ -90,6 +90,18 @@ describe("exportForeflight", () => {
     expect(result.fpl?.xml).toContain("FlightPlan/v1");
   });
 
+  it("notes when a long route name is shortened to Garmin's 25-char limit", async () => {
+    const result = await exportForeflight(["KPAE"], {
+      exportsDir: "/nonexistent",
+      save: false,
+      routeName: "Saturday morning practice to Arlington",
+    });
+    expect(result.notes.join(" ")).toMatch(/shortened to "SATURDAY MORNING PRACTICE"/);
+    // A name that fits gets no such note.
+    const short = await exportForeflight(["KPAE"], { exportsDir: "/nonexistent", save: false, routeName: "Lunch run" });
+    expect(short.notes.join(" ")).not.toMatch(/shortened/);
+  });
+
   it("skips the .fpl (but keeps the link) when a waypoint has no coordinates", async () => {
     const result = await exportForeflight(["KPAE", "KZZZ"], { exportsDir: "/nonexistent", save: false });
     expect(result.fpl).toBeNull();
