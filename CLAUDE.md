@@ -18,6 +18,9 @@ composes calendar / aircraft-availability / route providers into planning tools
   public `registry.npmjs.org`; keep it that way (see sandbox notes below).
 - `npm run typecheck` — both projects, `--noEmit`: `tsconfig.json` (server, NodeNext,
   excludes `src/ui`) and `tsconfig.ui.json` (browser View, DOM lib).
+- `npm run setup` — build, then register this checkout in Claude Desktop's
+  `claude_desktop_config.json` (`scripts/setup-claude-desktop.mjs`; merge-safe, keeps one
+  `.backup`, `CLAUDE_DESKTOP_CONFIG` overrides the config path, never echoes iCal URLs).
 - `npm run build` — `tsc` to `dist/`, then `node scripts/build-ui.mjs` esbuild-bundles
   `src/ui/profile-form.ts` and inlines it into `dist/ui/profile-form.html`.
 - `npm test` — `vitest run` (no vitest config file; defaults pick up `tests/*.test.ts`).

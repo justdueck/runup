@@ -258,16 +258,29 @@ text — UI is a progressive enhancement.
 
 ## Run it
 
+One-command Claude Desktop setup — builds, then registers this checkout in
+`claude_desktop_config.json` (merging with whatever is already there; the old
+file is backed up first):
+
 ```bash
 npm install
+npm run setup
+# with your calendar feed (see the Calendar section for where the URL comes from):
+npm run setup -- --ical-urls "https://calendar.google.com/calendar/ical/.../basic.ics"
+```
+
+Then fully quit and reopen Claude Desktop. Re-running `npm run setup` is safe:
+it keeps other servers and any env you configured (`--dry-run` previews).
+
+Manual pieces (build/test/start) if you prefer:
+
+```bash
 npm run build     # tsc + bundles the View into dist/ui/profile-form.html
 npm test          # vitest: unit tests + a Playwright run against a local mock portal (no network)
 npm start         # node dist/index.js (MCP over stdio)
 ```
 
-Claude Desktop config (`claude_desktop_config.json`) — see the
-[Calendar](#calendar-google-calendar-secret-ical-address) section for adding
-`RUNUP_ICAL_URLS` to this `env` block:
+and the equivalent `claude_desktop_config.json` entry, by hand:
 
 ```json
 {
@@ -281,8 +294,7 @@ Claude Desktop config (`claude_desktop_config.json`) — see the
 }
 ```
 
-Restart Claude Desktop after editing. The server logs to stderr; stdout is the
-protocol channel.
+The server logs to stderr; stdout is the protocol channel.
 
 ## Project layout
 
@@ -306,6 +318,7 @@ src/
                       keychain credentials, config/status
   ui/                 profile & minimums View (HTML template + App script)
 scripts/build-ui.mjs  esbuild bundling of the View into a single HTML file
+scripts/setup-claude-desktop.mjs  registers this checkout in claude_desktop_config.json
 tests/                vitest suites + fixtures (weather JSON, iCal .ics files)
   needlenine/         availability math, capture-hook, credentials, provider, and e2e suites
   mock-portal/        local NeedleNine-shaped portal used by the Playwright e2e test
