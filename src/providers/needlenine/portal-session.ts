@@ -17,6 +17,7 @@
  *   navigation, and the schedule's previous/next-day carets;
  * - dispose() closes the browser (also wired to server shutdown).
  */
+import { existsSync } from "node:fs";
 import type { Browser, BrowserContext, Page, Response } from "playwright";
 import type { NeedleNineCredentials } from "./credentials.js";
 import {
@@ -314,17 +315,29 @@ export class PortalSession implements SchedulerSession {
 
   private async launch(): Promise<void> {
     const pw = await loadPlaywright();
-    const executablePath = this.opts.executablePath;
-    try {
-      this.browser = await pw.chromium.launch({
-        headless: this.opts.headless ?? true,
-        chromiumSandbox: this.opts.chromiumSandbox ?? defaultChromiumSandbox(),
-        ...(executablePath ? { executablePath } : {}),
-        args: ["--disable-blink-features=AutomationControlled"],
-      });
-    } catch (err) {
-      throw browserLaunchError(err, executablePath);
+    const plan = chromiumLaunchPlan({ override: this.opts.executablePath ?? null });
+    const failures: string[] = [];
+    let browser: Browser | null = null;
+    for (const choice of plan) {
+      try {
+        browser = await pw.chromium.launch({
+          headless: this.opts.headless ?? true,
+          chromiumSandbox: this.opts.chromiumSandbox ?? defaultChromiumSandbox(),
+          ...(choice.executablePath ? { executablePath: choice.executablePath } : {}),
+          ...(choice.channel ? { channel: choice.channel } : {}),
+          args: ["--disable-blink-features=AutomationControlled"],
+        });
+        if (choice.source !== "playwright" && choice.source !== "override") {
+          this.log(`using the system browser (${choice.executablePath ?? `channel ${choice.channel}`})`);
+        }
+        break;
+      } catch (err) {
+        failures.push(`${choice.source}: ${briefError(err)}`);
+        this.log(`browser launch failed (${choice.source}), ${plan.indexOf(choice) < plan.length - 1 ? "trying next option" : "no options left"}`);
+      }
     }
+    if (!browser) throw browserLaunchError(plan, failures);
+    this.browser = browser;
     this.browser.on("disconnected", () => {
       this.disposed = true;
       this.log("browser disconnected");
@@ -737,18 +750,81 @@ export function attributeScheduleDate(
   return fallbackDate ?? best;
 }
 
-function browserLaunchError(err: unknown, executablePath: string | undefined): PortalError {
-  const text = err instanceof Error ? err.message : String(err);
-  if (/Executable doesn't exist|Failed to launch.*executable/i.test(text) || (err as { code?: string }).code === "ENOENT") {
+/**
+ * Well-known system Chromium/Chrome locations, tried when Playwright's own
+ * chromium is not installed and no RUNUP_CHROMIUM_PATH override is set.
+ */
+export function findSystemChromium(platform: NodeJS.Platform = process.platform): string | null {
+  const candidates =
+    platform === "darwin"
+      ? [
+          "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
+          "/Applications/Chromium.app/Contents/MacOS/Chromium",
+        ]
+      : platform === "win32"
+        ? [
+            "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe",
+            "C:\\Program Files (x86)\\Google\\Chrome\\Application\\chrome.exe",
+            ...(process.env.LOCALAPPDATA ? [`${process.env.LOCALAPPDATA}\\Google\\Chrome\\Application\\chrome.exe`] : []),
+          ]
+        : ["/usr/bin/google-chrome", "/usr/bin/google-chrome-stable", "/usr/bin/chromium", "/usr/bin/chromium-browser"];
+  return candidates.find((p) => existsSync(p)) ?? null;
+}
+
+/** Playwright's expected chromium path (may not exist on disk), or null when unknown. */
+export function bundledChromiumPath(pw: PlaywrightModule): string | null {
+  try {
+    return pw.chromium.executablePath();
+  } catch {
+    return null;
+  }
+}
+
+/** One browser-launch attempt: which binary/channel and why. */
+export interface ChromiumChoice {
+  source: "override" | "playwright" | "system-path" | "system-channel";
+  /** Explicit binary (override / detected system browser). Absent = playwright resolves. */
+  executablePath?: string;
+  /** Playwright distribution channel (system fallback when no known path exists). */
+  channel?: string;
+}
+
+/**
+ * THE chromium policy, as an ordered list of launch attempts:
+ * - RUNUP_CHROMIUM_PATH override is authoritative (no fallback - a configured
+ *   path that fails must surface, not be silently papered over);
+ * - otherwise playwright's own browser first, then the signed system Chrome
+ *   (by known path, else playwright's "chrome" channel discovery).
+ * Attempt-based on purpose: a binary can exist on disk yet fail to run
+ * (binary-authorization SIGKILL, missing headless shell), so existence checks
+ * cannot decide what will actually launch - trying can.
+ */
+export function chromiumLaunchPlan(opts: {
+  override: string | null;
+  platform?: NodeJS.Platform;
+  probeSystemBrowser?: (platform: NodeJS.Platform) => string | null;
+}): ChromiumChoice[] {
+  if (opts.override) return [{ source: "override", executablePath: opts.override }];
+  const system = (opts.probeSystemBrowser ?? findSystemChromium)(opts.platform ?? process.platform);
+  return [
+    { source: "playwright" },
+    system ? { source: "system-path", executablePath: system } : { source: "system-channel", channel: "chrome" },
+  ];
+}
+
+function browserLaunchError(plan: ChromiumChoice[], failures: string[]): PortalError {
+  if (plan[0]?.source === "override") {
     return new PortalError(
       "browser-missing",
-      executablePath
-        ? `Chromium was not found at RUNUP_CHROMIUM_PATH (${executablePath}).`
-        : "Chromium is not installed for Playwright.",
-      "Run `npx playwright install chromium` on this machine (or point RUNUP_CHROMIUM_PATH at an existing Chromium binary).",
+      `The browser at RUNUP_CHROMIUM_PATH (${plan[0].executablePath}) could not be launched (${failures[0] ?? "unknown error"}).`,
+      "Fix or unset RUNUP_CHROMIUM_PATH - it takes precedence over every other browser.",
     );
   }
-  return new PortalError("browser-launch", `Chromium failed to start: ${briefError(err)}.`, "Retry; if it persists, reinstall the browser with `npx playwright install chromium`.");
+  return new PortalError(
+    "browser-missing",
+    `No usable browser: every launch attempt failed (${failures.join("; ")}).`,
+    "Run `npx playwright install chromium`, install Google Chrome, or point RUNUP_CHROMIUM_PATH at a working Chromium binary.",
+  );
 }
 
 function safeBrowserVersion(browser: Browser): string {

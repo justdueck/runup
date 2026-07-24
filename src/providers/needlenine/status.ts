@@ -8,7 +8,7 @@ import { existsSync } from "node:fs";
 import type { Profile } from "../../profile.js";
 import { resolveSchedulerConfig } from "./config.js";
 import { describeCredentialSources, ENV_EMAIL, ENV_PASSWORD, keychainAddCommand, KEYCHAIN_SERVICE } from "./credentials.js";
-import { loadPlaywright } from "./portal-session.js";
+import { bundledChromiumPath, findSystemChromium, loadPlaywright } from "./portal-session.js";
 
 export interface SchedulerStatus {
   configured: boolean;
@@ -28,6 +28,8 @@ export interface SchedulerStatus {
   browser: {
     playwrightInstalled: boolean;
     chromiumPath: string | null;
+    /** Signed system Chrome/Chromium used as fallback when playwright's browser is absent. */
+    systemChromium: string | null;
     chromiumFound: boolean;
     executablePathOverride: string | null;
   };
@@ -39,6 +41,8 @@ export interface StatusOptions {
   platform?: NodeJS.Platform;
   /** Injectable playwright probe (tests): returns the chromium executable path. */
   probeBrowser?: () => Promise<{ installed: boolean; chromiumPath: string | null }>;
+  /** Injectable system-browser probe (tests); defaults to {@link findSystemChromium}. */
+  probeSystemBrowser?: (platform: NodeJS.Platform) => string | null;
 }
 
 export async function schedulerStatus(profile: Profile, opts: StatusOptions = {}): Promise<SchedulerStatus> {
@@ -48,7 +52,17 @@ export async function schedulerStatus(profile: Profile, opts: StatusOptions = {}
   const sources = describeCredentialSources(env, platform);
   const browser = await (opts.probeBrowser ?? defaultProbeBrowser)();
   const override = env.RUNUP_CHROMIUM_PATH ? env.RUNUP_CHROMIUM_PATH : null;
-  const chromiumFound = override !== null ? existsSync(override) : browser.chromiumPath !== null && existsSync(browser.chromiumPath);
+  const overrideExists = override !== null && existsSync(override);
+  const playwrightChromiumOnDisk = browser.chromiumPath !== null && existsSync(browser.chromiumPath);
+  // Best-effort prediction of the launch plan in portal-session.ts
+  // (chromiumLaunchPlan): the override is authoritative; otherwise
+  // playwright's browser is tried first and the signed system Chrome is the
+  // runtime fallback - launch() retries even when the bundled browser exists
+  // but fails to run, so this is a preview, not a guarantee.
+  const probeSystem = opts.probeSystemBrowser ?? findSystemChromium;
+  const systemChromium = browser.installed && override === null ? probeSystem(platform) : null;
+  const chromiumFound =
+    override !== null ? overrideExists : browser.installed && (playwrightChromiumOnDisk || systemChromium !== null);
 
   const notes: string[] = [];
   if (!cfg) {
@@ -70,8 +84,19 @@ export async function schedulerStatus(profile: Profile, opts: StatusOptions = {}
   }
   if (!browser.installed) {
     notes.push("The playwright package is not installed: run `npm install` in the runup folder.");
+  } else if (override !== null && !overrideExists) {
+    notes.push(
+      `RUNUP_CHROMIUM_PATH points at a missing file (${override}) - fix or unset it; it takes precedence over every other browser.`,
+    );
+  } else if (!playwrightChromiumOnDisk && systemChromium !== null) {
+    notes.push(
+      `Playwright's chromium is not installed; the system browser at ${systemChromium} will be used ` +
+        "(run `npx playwright install chromium` or set RUNUP_CHROMIUM_PATH to change this).",
+    );
   } else if (!chromiumFound) {
-    notes.push("Chromium is not installed for Playwright: run `npx playwright install chromium` (or set RUNUP_CHROMIUM_PATH).");
+    notes.push(
+      "No Chromium found: run `npx playwright install chromium`, install Google Chrome, or set RUNUP_CHROMIUM_PATH.",
+    );
   }
 
   return {
@@ -92,6 +117,7 @@ export async function schedulerStatus(profile: Profile, opts: StatusOptions = {}
     browser: {
       playwrightInstalled: browser.installed,
       chromiumPath: browser.chromiumPath,
+      systemChromium,
       chromiumFound,
       executablePathOverride: override,
     },
@@ -102,13 +128,7 @@ export async function schedulerStatus(profile: Profile, opts: StatusOptions = {}
 async function defaultProbeBrowser(): Promise<{ installed: boolean; chromiumPath: string | null }> {
   try {
     const pw = await loadPlaywright();
-    let chromiumPath: string | null = null;
-    try {
-      chromiumPath = pw.chromium.executablePath();
-    } catch {
-      chromiumPath = null;
-    }
-    return { installed: true, chromiumPath };
+    return { installed: true, chromiumPath: bundledChromiumPath(pw) };
   } catch {
     return { installed: false, chromiumPath: null };
   }

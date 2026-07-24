@@ -252,7 +252,7 @@ ui://runup/profile-form.html` (via `registerAppTool` from
 self-contained HTML page (`text/html;profile=mcp-app`) whose script uses the
 `App` class from `@modelcontextprotocol/ext-apps` to receive the tool result and
 to call `update_profile` when you press Save. `npm run build` bundles
-`src/ui/profile-form.ts` with esbuild and inlines it into
+`src/ui/profile-form.ts` with esbuild-wasm and inlines it into
 `dist/ui/profile-form.html`. Hosts without MCP Apps support just get the JSON
 text — UI is a progressive enhancement.
 
@@ -296,6 +296,17 @@ and the equivalent `claude_desktop_config.json` entry, by hand:
 
 The server logs to stderr; stdout is the protocol channel.
 
+**Managed / locked-down machines:** the whole toolchain deliberately avoids
+executing unallowlisted native binaries, so it works under binary-authorization
+systems such as Santa. The bundler is `esbuild-wasm` (WebAssembly inside node -
+the npm `overrides` entry aliases every `esbuild` in the tree to it; keep that
+override when updating dependencies). For the NeedleNine browser, Playwright's
+downloaded Chromium is typically blocked on such machines - if it is absent OR
+fails to launch (including an authorization kill), runup automatically retries
+with your installed, signed Google Chrome (or set `RUNUP_CHROMIUM_PATH`
+explicitly); you can skip the browser download entirely with
+`PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1 npm install`.
+
 ## Project layout
 
 ```
@@ -317,7 +328,7 @@ src/
     needlenine/       NeedleNine scheduler: site adapter, Playwright session, availability math,
                       keychain credentials, config/status
   ui/                 profile & minimums View (HTML template + App script)
-scripts/build-ui.mjs  esbuild bundling of the View into a single HTML file
+scripts/build-ui.mjs  esbuild-wasm bundling of the View into a single HTML file
 scripts/setup-claude-desktop.mjs  registers this checkout in claude_desktop_config.json
 tests/                vitest suites + fixtures (weather JSON, iCal .ics files)
   needlenine/         availability math, capture-hook, credentials, provider, and e2e suites
