@@ -35,6 +35,7 @@ MCP Apps extension.
 | `get_scheduler_status` | – | Whether the NeedleNine scheduler is configured (email, portal, timezone), where credentials come from (macOS keychain / env — names only), whether a Playwright browser is installed, and setup steps. Never returns secrets. |
 | `plan_routes` | `start`, `end` (ISO), `tail?`, `maxCandidates?` | Out-and-back candidates departing each home airport whose round trip fits the window, plus a local-practice option per home field. |
 | `plan_day` | `date` (YYYY-MM-DD), `timeOfDay?`, `runwayHeadingDeg?`, `minWindowHours?` | Windows → availability → conditions (at every home airport) → routes in one structured result. |
+| `export_foreflight` | `route` (identifiers in flying order), `routeName?`, `save?` | ForeFlight handoff: a `foreflightmobile://` deep link that opens the route in ForeFlight, plus a Garmin `.fpl` file written to `${RUNUP_HOME}/exports/` for import. |
 
 All tools return JSON as text content **and** as `structuredContent`, so both
 plain chat clients and MCP Apps Views can consume them.
@@ -121,6 +122,33 @@ knobs: `RUNUP_CHROMIUM_PATH` (use an existing Chromium binary),
 the profile's `scheduler.timezone` (default `America/Los_Angeles`, the
 school's zone).
 
+## ForeFlight handoff
+
+Plan in chat, fly from ForeFlight. Every route candidate from `plan_routes` /
+`plan_day` carries a `foreflight` block:
+
+```jsonc
+"foreflight": {
+  "route": "KPAE KAWO KPAE",
+  "openUrl": "foreflightmobile://maps/search?q=KPAE%20KAWO%20KPAE"
+}
+```
+
+Tap `openUrl` on the iPhone/iPad that has ForeFlight installed and the route
+opens in ForeFlight's Maps view (ForeFlight registers the
+`foreflightmobile://` URL scheme and resolves the identifiers against its own
+nav database). From there use **Send To → Flights** to save it — ForeFlight
+sync then makes the flight available on your other devices, so you can plan on
+the phone and fly it from the iPad.
+
+`export_foreflight` does the same for any waypoint sequence and additionally
+writes a Garmin FlightPlan (`.fpl`) file — ForeFlight's import format — to
+`${RUNUP_HOME:-~/.runup}/exports/`. AirDrop/email the file to the device (or
+open it from the Files app) and choose "Open in ForeFlight" if you prefer
+importing over the link. The `.fpl` needs coordinates, so it is only generated
+when every waypoint is in the bundled airport sample; the deep link works
+regardless.
+
 ## Minimums scoring
 
 `src/scoring.ts` is a pure function: condition summary + your minimums (day
@@ -178,6 +206,7 @@ src/
   weather.ts          aviationweather.gov client + METAR/TAF summaries
   scoring.ts          personal-minimums scoring (pure)
   planning.ts         plan_day composition + aircraft resolution
+  foreflight.ts       ForeFlight deep links + Garmin .fpl generation
   geo.ts              great-circle helper
   types.ts            shared domain types
   data/airports.json  small Puget Sound airport sample (placeholder; swap in FAA data)

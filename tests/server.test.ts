@@ -1,4 +1,4 @@
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, readFile, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -22,6 +22,7 @@ const EXPECTED_TOOLS = [
   "get_scheduler_status",
   "plan_routes",
   "plan_day",
+  "export_foreflight",
 ];
 
 let dir: string;
@@ -232,7 +233,48 @@ describe("runup MCP server", () => {
       arguments: { start: "2026-07-25T09:00:00-07:00", end: "2026-07-25T12:30:00-07:00" },
     });
     expect(ok.isError).toBeFalsy();
-    expect((ok.structuredContent as { routes: unknown[] }).routes.length).toBeGreaterThan(0);
+    const routes = (ok.structuredContent as { routes: Array<{ foreflight: { route: string; openUrl: string } }> }).routes;
+    expect(routes.length).toBeGreaterThan(0);
+    // Every candidate carries a one-tap ForeFlight handoff link.
+    for (const r of routes) {
+      expect(r.foreflight.openUrl).toMatch(/^foreflightmobile:\/\/maps\/search\?q=/);
+      expect(r.foreflight.route.split(" ").length).toBeGreaterThanOrEqual(1);
+    }
+  });
+
+  it("export_foreflight returns a deep link and writes a Garmin .fpl file", async () => {
+    const result = await client.callTool({
+      name: "export_foreflight",
+      arguments: { route: ["KPAE", "KAWO", "KPAE"], routeName: "Arlington lunch run" },
+    });
+    expect(result.isError).toBeFalsy();
+    const payload = result.structuredContent as {
+      route: string;
+      openUrl: string;
+      fpl: { fileName: string; xml: string; savedTo: string | null } | null;
+      notes: string[];
+    };
+    expect(payload.route).toBe("KPAE KAWO KPAE");
+    expect(payload.openUrl).toBe("foreflightmobile://maps/search?q=KPAE%20KAWO%20KPAE");
+    expect(payload.fpl?.fileName).toBe("KPAE-KAWO-KPAE.fpl");
+    expect(payload.fpl?.savedTo).toBe(path.join(dir, "exports", "KPAE-KAWO-KPAE.fpl"));
+    const onDisk = await readFile(payload.fpl!.savedTo!, "utf8");
+    expect(onDisk).toBe(payload.fpl!.xml);
+    expect(onDisk).toContain("http://www8.garmin.com/xmlschemas/FlightPlan/v1");
+    expect(onDisk).toContain("<route-name>ARLINGTON LUNCH RUN</route-name>");
+    expect(payload.notes.join(" ")).toMatch(/Send To > Flights/);
+  });
+
+  it("export_foreflight still links unknown airports but skips the .fpl", async () => {
+    const result = await client.callTool({
+      name: "export_foreflight",
+      arguments: { route: ["KPAE", "KZZZ"] },
+    });
+    expect(result.isError).toBeFalsy();
+    const payload = result.structuredContent as { openUrl: string; fpl: unknown; notes: string[] };
+    expect(payload.openUrl).toBe("foreflightmobile://maps/search?q=KPAE%20KZZZ");
+    expect(payload.fpl).toBeNull();
+    expect(payload.notes.join(" ")).toMatch(/No coordinates for KZZZ/);
   });
 
   it("plan_day composes the full picture", async () => {

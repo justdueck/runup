@@ -33,10 +33,10 @@ Speak newline-delimited JSON-RPC on stdin. Minimal sequence:
 
 1. `initialize` (`protocolVersion: "2025-06-18"`) → expect `serverInfo.name === "runup"`.
 2. `notifications/initialized` (no id).
-3. `tools/list` → 8 tools: `get_profile`, `update_profile`, `get_free_windows`,
+3. `tools/list` → 9 tools: `get_profile`, `update_profile`, `get_free_windows`,
    `get_conditions`, `get_aircraft_availability`, `get_scheduler_status`,
-   `plan_routes`, `plan_day` (the two profile tools carry
-   `_meta.ui.resourceUri = ui://runup/profile-form.html`).
+   `plan_routes`, `plan_day`, `export_foreflight`
+   (the two profile tools carry `_meta.ui.resourceUri = ui://runup/profile-form.html`).
 4. `tools/call get_profile` → default `homeAirports: ["KPAE", "KTIW"]`.
 5. `tools/call update_profile` with a patch, then check
    `$RUNUP_HOME/profile.json` on disk and call `get_profile` again → the
@@ -51,6 +51,12 @@ Speak newline-delimited JSON-RPC on stdin. Minimal sequence:
    configured" pointer (the NeedleNine portal is only driven when the profile
    has a `scheduler` block — do not add one when verifying against a scratch
    profile unless you also mock the portal).
+8. `tools/call export_foreflight` with `{"route": ["KPAE", "KAWO", "KPAE"]}` →
+   a `foreflightmobile://maps/search?q=...` deep link, plus a Garmin `.fpl`
+   written to `$RUNUP_HOME/exports/` whose XML matches the returned `fpl.xml`;
+   an identifier missing from the bundled sample keeps the link but returns
+   `fpl: null` with a note. `plan_routes`/`plan_day` candidates each carry a
+   `foreflight.openUrl` deep link.
 
 Probe off-happy-path inputs too: an invalid `update_profile` patch (e.g.
 negative `ceilingFt`) and a malformed date to `get_free_windows` must come

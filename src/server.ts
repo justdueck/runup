@@ -19,6 +19,7 @@ import {
   profilePath as defaultProfilePath,
   ProfilePatchSchema,
 } from "./profile.js";
+import { exportForeflight, withForeflight } from "./foreflight.js";
 import { AviationWeatherClient, summarizeMetar, summarizeTaf } from "./weather.js";
 import { scoreConditions } from "./scoring.js";
 import { dateSpan, planDay, resolveAircraftPerformance } from "./planning.js";
@@ -303,8 +304,47 @@ export function createServer(deps: ServerDeps = {}): McpServer {
         profile,
         maxCandidates !== undefined ? { maxCandidates } : {},
       );
-      return jsonResult({ window, aircraft, notes, routes });
+      return jsonResult({ window, aircraft, notes, routes: routes.map(withForeflight) });
     },
+  );
+
+  // --- ForeFlight handoff ------------------------------------------------------
+
+  server.registerTool(
+    "export_foreflight",
+    {
+      title: "Export a route to ForeFlight",
+      description:
+        "Turn a planned route into a ForeFlight handoff: a foreflightmobile:// deep link that opens the route " +
+        "in ForeFlight's Maps view when tapped on an iPhone/iPad with ForeFlight installed (save it as a " +
+        "Flight there and ForeFlight sync carries it to your other devices), plus a Garmin .fpl flight-plan " +
+        "file ForeFlight can import, written under the runup data directory. Route candidates from " +
+        "plan_routes/plan_day already carry the deep link in their `foreflight` field; use this tool for the " +
+        ".fpl file or a custom waypoint sequence.",
+      inputSchema: {
+        route: z
+          .array(AirportIdSchema)
+          .min(1)
+          .max(20)
+          .describe(
+            'Airport identifiers in flying order, e.g. ["KPAE", "KAWO", "KPAE"] for an out-and-back. ' +
+              "Repeat the home field at the end for a round trip.",
+          ),
+        routeName: z.string().max(50).optional().describe("Name for the saved flight plan (defaults to the route string)."),
+        save: z
+          .boolean()
+          .default(true)
+          .describe("Write the .fpl file to disk (default true). Set false to just get the link and XML."),
+      },
+    },
+    async ({ route, routeName, save }): Promise<CallToolResult> =>
+      jsonResult(
+        await exportForeflight(route, {
+          exportsDir: path.join(path.dirname(profileFile), "exports"),
+          ...(routeName !== undefined ? { routeName } : {}),
+          save,
+        }),
+      ),
   );
 
   // --- Composite: plan a whole day ---------------------------------------------
