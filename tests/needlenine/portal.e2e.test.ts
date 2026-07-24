@@ -6,6 +6,7 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { validateProfile, defaultProfile, type Profile } from "../../src/profile.js";
 import { ENV_PASSWORD, Secret } from "../../src/providers/needlenine/credentials.js";
+import { ENV_PORTAL_URL } from "../../src/providers/needlenine/config.js";
 import { PortalError, PortalSession } from "../../src/providers/needlenine/portal-session.js";
 import { NeedleNineError, NeedleNineProvider } from "../../src/providers/needlenine/provider.js";
 import { addDaysToDate, localDateOf, zonedDateTimeToUtcMs } from "../../src/providers/needlenine/time.js";
@@ -92,7 +93,10 @@ const schedules: Record<string, unknown[]> = {
   ],
 };
 
-function e2eProfile(portalUrl: string): Profile {
+// The mock portal URL is NOT in the profile: the schema restricts profile
+// portalUrl to https needlenine.com hosts, so tests use the trusted
+// RUNUP_NEEDLENINE_PORTAL_URL env override like a real operator would.
+function e2eProfile(): Profile {
   return validateProfile({
     ...defaultProfile(),
     aircraft: ["N11111", "N22222", "N33333", "N44444", "N66666"].map((tail) => ({
@@ -103,7 +107,7 @@ function e2eProfile(portalUrl: string): Profile {
       fuelBurnGph: 9,
       usableFuelGal: 53,
     })).concat([{ tail: "N678SP", type: "C172S", checkedOut: false, cruiseKtas: 115, fuelBurnGph: 9.5, usableFuelGal: 53 }]),
-    scheduler: { provider: "needlenine", email: EMAIL, portalUrl, timezone: TZ },
+    scheduler: { provider: "needlenine", email: EMAIL, timezone: TZ },
   });
 }
 
@@ -115,8 +119,8 @@ suite("NeedleNine portal automation against the local mock portal", { timeout: 9
   beforeAll(async () => {
     mock = await startMockPortal({ email: EMAIL, password: PASSWORD, roster, schedules, timezone: TZ });
     provider = new NeedleNineProvider({
-      loadProfile: async () => e2eProfile(mock.url),
-      env: { [ENV_PASSWORD]: PASSWORD },
+      loadProfile: async () => e2eProfile(),
+      env: { [ENV_PASSWORD]: PASSWORD, [ENV_PORTAL_URL]: mock.url },
       platform: "linux", // never touch a real macOS keychain from tests
       logger: (line) => logs.push(line),
     });
@@ -191,8 +195,8 @@ suite("NeedleNine portal automation against the local mock portal", { timeout: 9
 
   it("reports a rejected login as a friendly one-liner without echoing the password", async () => {
     const bad = new NeedleNineProvider({
-      loadProfile: async () => e2eProfile(mock.url),
-      env: { [ENV_PASSWORD]: WRONG_PASSWORD },
+      loadProfile: async () => e2eProfile(),
+      env: { [ENV_PASSWORD]: WRONG_PASSWORD, [ENV_PORTAL_URL]: mock.url },
       platform: "linux",
     });
     try {

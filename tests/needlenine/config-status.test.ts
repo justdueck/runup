@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { defaultProfile, validateProfile, applyProfilePatch } from "../../src/profile.js";
+import { defaultProfile, validateProfile, applyProfilePatch, type ProfileValidationError } from "../../src/profile.js";
 import { resolveSchedulerConfig } from "../../src/providers/needlenine/config.js";
 import { schedulerStatus } from "../../src/providers/needlenine/status.js";
 import { ENV_EMAIL, ENV_PASSWORD } from "../../src/providers/needlenine/credentials.js";
@@ -27,10 +27,17 @@ describe("scheduler config resolution", () => {
       origin: "profile",
     });
     const custom = resolveSchedulerConfig(
-      profileWithScheduler({ portalUrl: "https://beta.example.test/", timezone: "America/Denver", tenantId: "t-1" }),
+      profileWithScheduler({ portalUrl: "https://beta.needlenine.com/", timezone: "America/Denver", tenantId: "t-1" }),
       {},
     );
-    expect(custom).toMatchObject({ portalUrl: "https://beta.example.test/", timezone: "America/Denver", tenantId: "t-1" });
+    expect(custom).toMatchObject({ portalUrl: "https://beta.needlenine.com/", timezone: "America/Denver", tenantId: "t-1" });
+  });
+
+  it("lets the trusted env portal override win over the chat-writable profile value", () => {
+    const cfg = resolveSchedulerConfig(profileWithScheduler({ portalUrl: "https://beta.needlenine.com/" }), {
+      RUNUP_NEEDLENINE_PORTAL_URL: "https://mock.internal.test/",
+    });
+    expect(cfg?.portalUrl).toBe("https://mock.internal.test/");
   });
 
   it("can be enabled from the environment alone", () => {
@@ -44,6 +51,26 @@ describe("scheduler config resolution", () => {
       /validation/,
     );
     expect(() => validateProfile({ ...defaultProfile(), scheduler: { provider: "other-scheduler", email: "a@b.test" } })).toThrow();
+  });
+
+  it("rejects portal URLs off needlenine.com so a profile patch cannot redirect the login (and password)", () => {
+    const withPortal = (portalUrl: string) =>
+      validateProfile({ ...defaultProfile(), scheduler: { provider: "needlenine", email: "a@b.test", portalUrl } });
+    const expectRejected = (portalUrl: string) => {
+      let issues = "";
+      try {
+        withPortal(portalUrl);
+      } catch (err) {
+        issues = String((err as ProfileValidationError).issues);
+      }
+      expect(issues, `portalUrl ${portalUrl} should be rejected`).toMatch(/needlenine\.com/);
+    };
+    expectRejected("https://evil.example.com/");
+    expectRejected("https://portal.needlenine.com.evil.example/");
+    expectRejected("https://evilneedlenine.com/");
+    expectRejected("http://portal.needlenine.com/"); // https only
+    expect(withPortal("https://portal.needlenine.com/").scheduler?.portalUrl).toBe("https://portal.needlenine.com/");
+    expect(withPortal("https://beta.needlenine.com/").scheduler?.portalUrl).toBe("https://beta.needlenine.com/");
   });
 
   it("supports adding and clearing the block through profile patches", () => {

@@ -75,6 +75,14 @@ password is read at runtime from the macOS keychain (service
 `RUNUP_NEEDLENINE_PASSWORD` environment variable — see
 `src/providers/needlenine/credentials.ts`.
 
+**Portal URL is allowlisted.** Because the profile can be edited from any
+chat (`update_profile`) and the login flow types your password into whatever
+page `portalUrl` points at, the profile only accepts https `needlenine.com`
+URLs, and the browser refuses to enter credentials on any other origin (e.g.
+after an unexpected redirect). To point at a staging or local mock portal,
+set the trusted `RUNUP_NEEDLENINE_PORTAL_URL` environment variable on the
+server instead.
+
 ## Aircraft availability (NeedleNine)
 
 The flight school runs [NeedleNine](https://needlenine.com), which has no public

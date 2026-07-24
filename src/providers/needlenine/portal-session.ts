@@ -345,6 +345,23 @@ export class PortalSession implements SchedulerSession {
     this.log(`browser ready (chromium ${version})`);
   }
 
+  /**
+   * Fail closed if the browser is not on the configured portal's origin —
+   * credentials must never be entered into a page a redirect (compromised
+   * portal, captive portal, DNS games) navigated to.
+   */
+  private assertOnConfiguredPortal(page: Page): void {
+    const expected = new URL(this.opts.portalUrl).origin;
+    const actual = new URL(page.url()).origin;
+    if (actual !== expected) {
+      throw new PortalError(
+        "site-changed",
+        `The login page is on ${actual}, not the configured portal ${expected}; refusing to enter credentials.`,
+        "If the school moved portals, update the scheduler portal URL explicitly.",
+      );
+    }
+  }
+
   private async login(): Promise<void> {
     const page = this.requirePage();
     this.loggedIn = false;
@@ -360,6 +377,8 @@ export class PortalSession implements SchedulerSession {
       );
     }
 
+    this.assertOnConfiguredPortal(page);
+
     const emailInput = page.locator(LOGIN_FORM.email).first();
     try {
       await emailInput.waitFor({ state: "visible", timeout: this.cfg.navigationTimeoutMs });
@@ -374,6 +393,8 @@ export class PortalSession implements SchedulerSession {
 
     const passwordInput = page.locator(LOGIN_FORM.password).first();
     await passwordInput.waitFor({ state: "visible", timeout: 5_000 });
+    // The page may have redirected while we waited; re-check before the secret goes in.
+    this.assertOnConfiguredPortal(page);
     // Set the secret through one in-page DOM call (not fill/type) so it never
     // travels through Playwright's typed-input APIs; errors below are ours.
     await passwordInput.evaluate(setInputValueInPage, this.creds.password.reveal());

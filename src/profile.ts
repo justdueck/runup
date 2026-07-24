@@ -82,6 +82,30 @@ export const PreferencesSchema = z.object({
 export type Preferences = z.infer<typeof PreferencesSchema>;
 
 /**
+ * The profile is writable by any chat via `update_profile`, and the portal
+ * session types the keychain password into whatever page `portalUrl` points
+ * at — so the profile may only select NeedleNine-owned https hosts, never an
+ * arbitrary URL (credential-exfiltration guard). Operators who need a
+ * different host (local mock, staging) set the trusted
+ * RUNUP_NEEDLENINE_PORTAL_URL environment variable on the server instead.
+ */
+export const NeedleNinePortalUrlSchema = z.url().refine(
+  (value) => {
+    try {
+      const url = new URL(value);
+      return url.protocol === "https:" && (url.hostname === "needlenine.com" || url.hostname.endsWith(".needlenine.com"));
+    } catch {
+      return false;
+    }
+  },
+  {
+    message:
+      "portalUrl must be an https needlenine.com URL; for a local/staging portal set " +
+      "RUNUP_NEEDLENINE_PORTAL_URL in the server environment instead",
+  },
+);
+
+/**
  * Flight-school scheduler connection (currently only NeedleNine). Holds the
  * login *email* and portal settings — never the password, which is read
  * from the macOS keychain (service "runup-needlenine", account = email) or
@@ -91,8 +115,8 @@ export const SchedulerConfigSchema = z.object({
   provider: z.literal("needlenine"),
   /** NeedleNine login email (also the keychain account name). Not a secret. */
   email: z.email(),
-  /** Portal origin override (default https://portal.needlenine.com). */
-  portalUrl: z.url().optional(),
+  /** Portal origin override; must stay on needlenine.com (default https://portal.needlenine.com). */
+  portalUrl: NeedleNinePortalUrlSchema.optional(),
   /** School timezone (IANA), used for schedule day boundaries. Default America/Los_Angeles. */
   timezone: z.string().trim().min(1).optional(),
   /** Tenant id path segment; auto-detected after login, set only if that detection fails. */

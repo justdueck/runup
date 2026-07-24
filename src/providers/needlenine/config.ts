@@ -29,7 +29,9 @@ export function resolveSchedulerConfig(profile: Profile, env: NodeJS.ProcessEnv 
     return {
       provider: NEEDLENINE_PROVIDER,
       email: block.email,
-      portalUrl: block.portalUrl ?? nonEmpty(env[ENV_PORTAL_URL]) ?? DEFAULT_PORTAL_URL,
+      // Trusted operator env override first: the profile is writable from any
+      // chat, so it must never shadow where the operator pointed the portal.
+      portalUrl: nonEmpty(env[ENV_PORTAL_URL]) ?? block.portalUrl ?? DEFAULT_PORTAL_URL,
       timezone: block.timezone ?? DEFAULT_TENANT_TIMEZONE,
       ...(block.tenantId ? { tenantId: block.tenantId } : {}),
       origin: "profile",
