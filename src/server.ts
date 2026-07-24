@@ -362,7 +362,8 @@ export function createServer(deps: ServerDeps = {}): McpServer {
     },
     async (): Promise<CallToolResult> => {
       const profile = await loadProfile(profileFile);
-      return jsonResult(await schedulerStatus(profile));
+      // Same env as availability queries, so status never contradicts them.
+      return jsonResult(await schedulerStatus(profile, { env }));
     },
   );
 
