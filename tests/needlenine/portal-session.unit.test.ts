@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   attributeScheduleDate,
   briefError,
+  chromiumLaunchPlan,
   defaultChromiumSandbox,
   sanitizeDebugEnv,
 } from "../../src/providers/needlenine/portal-session.js";
@@ -81,5 +82,26 @@ describe("briefError", () => {
     expect(briefError("plain string")).toBe("plain string");
     expect(briefError(new Error(`${"x".repeat(500)}`))).toHaveLength(200);
     expect(briefError(new Error("\n\n  \nreal message here"))).toBe("real message here");
+  });
+});
+
+describe("chromiumLaunchPlan", () => {
+  it("an override is authoritative - no fallback attempts", () => {
+    expect(chromiumLaunchPlan({ override: "/opt/my/chrome" })).toEqual([
+      { source: "override", executablePath: "/opt/my/chrome" },
+    ]);
+  });
+
+  it("tries playwright first, then a detected system browser by path", () => {
+    const plan = chromiumLaunchPlan({ override: null, platform: "darwin", probeSystemBrowser: () => "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome" });
+    expect(plan).toEqual([
+      { source: "playwright" },
+      { source: "system-path", executablePath: "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome" },
+    ]);
+  });
+
+  it("falls back to playwright's chrome channel when no system path is known", () => {
+    const plan = chromiumLaunchPlan({ override: null, platform: "linux", probeSystemBrowser: () => null });
+    expect(plan).toEqual([{ source: "playwright" }, { source: "system-channel", channel: "chrome" }]);
   });
 });

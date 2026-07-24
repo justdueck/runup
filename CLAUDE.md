@@ -105,6 +105,14 @@ composes calendar / aircraft-availability / route providers into planning tools
   server and planner see only the interfaces in `providers/types.ts`.
 - Tool errors are one-line, human-readable `isError: true` results (`errorResult`,
   `formatIssues`) — no stack dumps to the model.
+- The toolchain must not execute unallowlisted native binaries (the developer's
+  machine runs a binary-authorization system): `esbuild` is aliased to
+  `esbuild-wasm` via the package.json `overrides` entry - keep that override
+  when touching dependencies, and prefer wasm/pure-JS/system-signed binaries
+  for any new tool. The NeedleNine browser launch is
+  attempt-based (`chromiumLaunchPlan` in portal-session.ts): playwright's browser first,
+  then the signed system Chrome - existence checks can't detect a present-but-blocked
+  binary, so failures fall through to the next attempt.
 - ESM + `moduleResolution: NodeNext`: import TS modules with a `.js` extension
   (`./scoring.js`). zod is v4 (`z.iso.datetime`, `z.looseObject`, `.meta()`).
 

@@ -103,9 +103,13 @@ describe("scheduler config resolution", () => {
 describe("schedulerStatus (secret-free)", () => {
   const probeInstalled = async () => ({ installed: true, chromiumPath: "/definitely/missing/chrome" });
   const probeMissing = async () => ({ installed: false, chromiumPath: null });
+  // Deterministic across machines: pretend no system browser unless a test says otherwise.
+  const noSystemBrowser = () => null;
+  const statusOf = (profile = defaultProfile(), opts: Parameters<typeof schedulerStatus>[1] = {}) =>
+    schedulerStatus(profile, { probeSystemBrowser: noSystemBrowser, probeBrowser: probeInstalled, ...opts });
 
   it("reports not-configured with setup steps", async () => {
-    const status = await schedulerStatus(defaultProfile(), { env: {}, platform: "darwin", probeBrowser: probeInstalled });
+    const status = await statusOf(defaultProfile(), { env: {}, platform: "darwin" });
     expect(status.configured).toBe(false);
     expect(status.email).toBeNull();
     expect(status.notes.join("\n")).toMatch(/update_profile/);
@@ -118,7 +122,7 @@ describe("schedulerStatus (secret-free)", () => {
 
   it("reports the configured account without ever including secret values", async () => {
     const env = { [ENV_PASSWORD]: "s3cr3t-value", RUNUP_CHROMIUM_PATH: "/opt/nowhere/chrome" };
-    const status = await schedulerStatus(profileWithScheduler(), { env, platform: "linux", probeBrowser: probeInstalled });
+    const status = await statusOf(profileWithScheduler(), { env, platform: "linux" });
     expect(status.configured).toBe(true);
     expect(status.configuredVia).toBe("profile");
     expect(status.email).toBe("pilot@example.com");
@@ -131,13 +135,62 @@ describe("schedulerStatus (secret-free)", () => {
   });
 
   it("notes a missing playwright install", async () => {
-    const status = await schedulerStatus(defaultProfile(), { env: {}, platform: "linux", probeBrowser: probeMissing });
+    const status = await statusOf(defaultProfile(), { env: {}, platform: "linux", probeBrowser: probeMissing });
     expect(status.browser).toEqual({
       playwrightInstalled: false,
       chromiumPath: null,
+      systemChromium: null,
       chromiumFound: false,
       executablePathOverride: null,
     });
     expect(status.notes.join("\n")).toMatch(/npm install/);
+  });
+
+  it("falls back to a system browser when playwright's chromium is absent", async () => {
+    const chrome = "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome";
+    const status = await statusOf(defaultProfile(), {
+      env: {},
+      platform: "darwin",
+      probeSystemBrowser: (platform) => (platform === "darwin" ? chrome : null),
+    });
+    expect(status.browser.systemChromium).toBe(chrome);
+    expect(status.browser.chromiumFound).toBe(true);
+    expect(status.notes.join("\n")).toMatch(/system browser at/);
+  });
+
+  it("names a stale RUNUP_CHROMIUM_PATH as the problem instead of suggesting installs", async () => {
+    const status = await statusOf(defaultProfile(), {
+      env: { RUNUP_CHROMIUM_PATH: "/opt/typo/chrome" },
+      platform: "darwin",
+    });
+    expect(status.browser.chromiumFound).toBe(false);
+    expect(status.notes.join("\n")).toMatch(/RUNUP_CHROMIUM_PATH points at a missing file/);
+    expect(status.notes.join("\n")).not.toMatch(/No Chromium found/);
+  });
+
+  it("never reports a usable browser when the playwright package is missing", async () => {
+    const chrome = "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome";
+    const status = await statusOf(defaultProfile(), {
+      env: {},
+      platform: "darwin",
+      probeBrowser: probeMissing,
+      probeSystemBrowser: () => chrome, // system Chrome present, but nothing can drive it
+    });
+    expect(status.browser.playwrightInstalled).toBe(false);
+    expect(status.browser.systemChromium).toBeNull();
+    expect(status.browser.chromiumFound).toBe(false);
+    expect(status.notes.join("\n")).toMatch(/npm install/);
+  });
+
+  it("does not consult the system browser when RUNUP_CHROMIUM_PATH is set", async () => {
+    const status = await statusOf(defaultProfile(), {
+      env: { RUNUP_CHROMIUM_PATH: "/opt/nowhere/chrome" },
+      platform: "darwin",
+      probeSystemBrowser: () => {
+        throw new Error("must not be called when an override is set");
+      },
+    });
+    expect(status.browser.systemChromium).toBeNull();
+    expect(status.browser.executablePathOverride).toBe("/opt/nowhere/chrome");
   });
 });
