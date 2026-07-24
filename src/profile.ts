@@ -195,8 +195,9 @@ export type Profile = z.infer<typeof ProfileSchema>;
  * blocks individually partial. `schemaVersion` is intentionally not patchable.
  * Arrays (`homeAirports`, `aircraft`, `calendar.icalUrls`), when present,
  * replace the whole list (simplest predictable rule). Patch fields never
- * carry defaults, so an omitted field always means "leave unchanged";
- * `scheduler: null` removes the scheduler block.
+ * carry defaults, so an omitted field always means "leave unchanged".
+ * The `scheduler` block is replaced WHOLESALE when present (include every
+ * field you want kept); `scheduler: null` removes it.
  */
 export const ProfilePatchSchema = z
   .object({
@@ -397,12 +398,29 @@ function enqueueSave<T>(filePath: string, task: () => Promise<T>): Promise<T> {
 }
 
 /**
+ * Object-valued patch keys that are replaced WHOLESALE instead of deep-merged.
+ * Connection descriptors go here: deep-merging `scheduler` would let a stale
+ * tenantId/portalUrl/timezone survive an account or school switch and point
+ * the portal automation at the wrong place.
+ */
+const REPLACE_WHOLESALE_KEYS = ["scheduler"] as const;
+
+/**
  * Pure merge of a patch onto a profile: objects merge recursively, arrays and
- * scalars are replaced. Result is re-validated.
+ * scalars are replaced, {@link REPLACE_WHOLESALE_KEYS} blocks are replaced
+ * wholesale. Result is re-validated.
  */
 export function applyProfilePatch(profile: Profile, patch: ProfilePatch): Profile {
-  const cleanPatch = ProfilePatchSchema.parse(patch);
-  const merged = deepMerge(structuredClone(profile) as Record<string, unknown>, cleanPatch as Record<string, unknown>);
+  const cleanPatch = ProfilePatchSchema.parse(patch) as Record<string, unknown>;
+  const base = structuredClone(profile) as Record<string, unknown>;
+  const mergeable = { ...cleanPatch };
+  for (const key of REPLACE_WHOLESALE_KEYS) {
+    // An explicitly-undefined key means "leave unchanged" (same as omitted);
+    // only null removes the block.
+    if (key in cleanPatch && cleanPatch[key] !== undefined) base[key] = cleanPatch[key];
+    delete mergeable[key];
+  }
+  const merged = deepMerge(base, mergeable);
   return validateProfile(merged);
 }
 

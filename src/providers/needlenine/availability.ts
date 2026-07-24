@@ -12,6 +12,7 @@
  * are ISO instants; results carry both ISO (UTC) and tenant-local
  * wall-clock renderings for narration.
  */
+import { overlaps, subtractIntervals, type Interval } from "../../intervals.js";
 import { round2 } from "../../util.js";
 import type { AircraftAvailability, BusyBlock, BusyBlockKind, FreeInterval, TailAvailability, TimeWindow } from "../../types.js";
 import {
@@ -69,49 +70,6 @@ export function matchTailsToRoster(
     result.set(tail, active ?? matches[0] ?? null);
   }
   return result;
-}
-
-// --- Interval math -------------------------------------------------------------
-
-/** Half-open interval [start, end) in epoch milliseconds. */
-export interface Interval {
-  start: number;
-  end: number;
-}
-
-/** Merge overlapping or touching intervals; empty/inverted intervals are dropped. */
-export function mergeIntervals(intervals: readonly Interval[]): Interval[] {
-  const sorted = intervals.filter((i) => i.end > i.start).sort((a, b) => a.start - b.start || a.end - b.end);
-  const merged: Interval[] = [];
-  for (const interval of sorted) {
-    const last = merged[merged.length - 1];
-    if (last && interval.start <= last.end) {
-      last.end = Math.max(last.end, interval.end);
-    } else {
-      merged.push({ start: interval.start, end: interval.end });
-    }
-  }
-  return merged;
-}
-
-/** Free sub-intervals of `window` not covered by (already merged, sorted) busy intervals. */
-export function subtractIntervals(window: Interval, busy: readonly Interval[]): Interval[] {
-  const free: Interval[] = [];
-  let cursor = window.start;
-  for (const b of busy) {
-    if (b.end <= cursor) continue;
-    if (b.start >= window.end) break;
-    if (b.start > cursor) free.push({ start: cursor, end: Math.min(b.start, window.end) });
-    cursor = Math.max(cursor, b.end);
-    if (cursor >= window.end) break;
-  }
-  if (cursor < window.end) free.push({ start: cursor, end: window.end });
-  return free;
-}
-
-/** True when [a) and [b) share any time (touching endpoints do not overlap). */
-export function overlaps(a: Interval, b: Interval): boolean {
-  return a.start < b.end && b.start < a.end;
 }
 
 // --- Busy blocks from appointment records -------------------------------------------
@@ -243,8 +201,7 @@ export function assessTail(input: AssessTailInput): TailAvailability {
     nowMs: input.nowMs,
   });
   const inWindow = allBlocks.filter((b) => overlaps(b, window));
-  const merged = mergeIntervals(inWindow);
-  const freeIntervals = subtractIntervals(window, merged);
+  const freeIntervals = subtractIntervals(window, inWindow);
 
   const blocks: BusyBlock[] = inWindow.map((b) => toBusyBlock(b, timeZone));
   const free: FreeInterval[] = freeIntervals.map((f) => toFreeInterval(f, timeZone));

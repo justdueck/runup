@@ -172,9 +172,12 @@ suite("NeedleNine portal automation against the local mock portal", { timeout: 9
     const n3 = result.tails!.find((t) => t.tail === "N33333")!;
     expect(n3.status).toBe("unavailable"); // grounded + MX block overlaps 06:00-08:00 tomorrow
     expect(n3.blocks.map((b) => b.kind)).toEqual(["maintenance"]);
-    // No new schedule fetches were needed (both days cached in-session).
+    // Today and tomorrow were cached in-session; only the overnight lookback
+    // day (yesterday) needed fetching, and stepping back to it passes through
+    // today (the app issues one schedule request per day it shows).
     const after = mock.requests.filter((r) => r.path.startsWith("/api/schedule?")).length;
-    expect(after).toBe(before);
+    expect(after - before).toBe(2);
+    expect(mock.requests.some((r) => r.path.includes(`scheduledate=${addDaysToDate(today, -1)}`))).toBe(true);
   });
 
   it("reads a day with no bookings (tiny encrypted body) as an empty day", async () => {

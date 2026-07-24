@@ -4,13 +4,11 @@ import {
   busyIntervalsFromCalendars,
   computeFreeWindows,
   IcalCalendarProvider,
-  mergeIntervals,
   resolveIcalUrls,
   scrubIcalUrls,
-  subtractIntervals,
   type IcalCalendarSettings,
-  type Interval,
 } from "../src/providers/ical-calendar.js";
+import { mergeIntervals, subtractIntervals, type Interval } from "../src/intervals.js";
 import { defaultProfile } from "../src/profile.js";
 import type { HttpTextFetcher } from "../src/http.js";
 import { loadTextFixture as readIcs, MemoryIcsFetcher } from "./helpers.js";
