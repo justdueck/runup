@@ -29,7 +29,7 @@ import { scoreConditions } from "./scoring.js";
 import { dateSpanInZone, planDay, resolveAircraftPerformance } from "./planning.js";
 import { tagWindowsWithDaylight } from "./daylight.js";
 import { FixtureCalendarProvider } from "./providers/calendar.js";
-import { FixtureAvailabilityProvider } from "./providers/availability.js";
+import { SchedulerAvailabilityProvider } from "./providers/availability.js";
 import {
   calendarSettingsFromProfile,
   IcalCalendarProvider,
@@ -37,6 +37,7 @@ import {
   resolveIcalUrls,
   scrubIcalUrls,
 } from "./providers/ical-calendar.js";
+import { schedulerStatus } from "./providers/needlenine/status.js";
 import { NaiveRoutePlanner } from "./providers/routes.js";
 import type { CalendarProvider, Providers } from "./providers/types.js";
 import { makeWindow, type TimeWindow } from "./types.js";
@@ -95,12 +96,28 @@ export interface ServerDeps {
   env?: NodeJS.ProcessEnv;
 }
 
-export function defaultProviders(): Providers {
+export function defaultProviders(
+  profileFile: string = defaultProfilePath(),
+  env: NodeJS.ProcessEnv = process.env,
+): Providers {
   return {
     calendar: new FixtureCalendarProvider(),
-    availability: new FixtureAvailabilityProvider(),
+    availability: new SchedulerAvailabilityProvider({ loadProfile: () => loadProfile(profileFile), env }),
     routes: new NaiveRoutePlanner(),
   };
+}
+
+/** Release provider resources (e.g. the NeedleNine browser session) on shutdown. */
+export async function disposeProviders(providers: Providers): Promise<void> {
+  const candidates: unknown[] = [providers.calendar, providers.availability, providers.routes];
+  await Promise.all(
+    candidates.map(async (provider) => {
+      const dispose = (provider as { dispose?: () => Promise<void> }).dispose;
+      if (typeof dispose === "function") {
+        await dispose.call(provider).catch(() => {});
+      }
+    }),
+  );
 }
 
 /** Which calendar provider serves a request, plus the notes that explain it in the output. */
@@ -113,10 +130,12 @@ interface CalendarSelection {
 
 export function createServer(deps: ServerDeps = {}): McpServer {
   const profileFile = deps.profilePath ?? defaultProfilePath();
-  const providers = deps.providers ?? defaultProviders();
+  const env = deps.env ?? process.env;
+  // Thread the injected env into the default providers too, so scheduler
+  // config/credentials honor it the same way the calendar config does.
+  const providers = deps.providers ?? defaultProviders(profileFile, env);
   const weather = deps.weather ?? new AviationWeatherClient();
   const loadUiHtml = deps.loadUiHtml ?? defaultUiHtmlLoader;
-  const env = deps.env ?? process.env;
   const icsFetcher = deps.icsFetcher;
 
   /**
@@ -313,14 +332,37 @@ export function createServer(deps: ServerDeps = {}): McpServer {
     {
       title: "Get aircraft availability",
       description:
-        "Check which aircraft tails at the flight school appear free for a time window (currently a fixture " +
-        "provider; the school's scheduler is not wired up yet).",
+        "Check which of your checked-out aircraft tails at the flight school are free for a time window. Uses the " +
+        "NeedleNine portal (read-only browser automation with your keychain-stored login) when a scheduler is " +
+        "configured in the profile; otherwise returns placeholder fixture data with setup instructions. Per-tail " +
+        "detail lists free sub-intervals, the bookings/maintenance blocking each tail (no member identities), and " +
+        "airworthiness flags.",
       inputSchema: WINDOW_INPUT_SHAPE,
     },
     async ({ start, end }): Promise<CallToolResult> => {
       const parsed = windowFromInput({ start, end });
       if ("error" in parsed) return parsed.error;
-      return jsonResult(await providers.availability.getAircraftAvailability(parsed.window));
+      try {
+        return jsonResult(await providers.availability.getAircraftAvailability(parsed.window));
+      } catch (err) {
+        return errorResult(`Aircraft availability failed: ${(err as Error).message}`);
+      }
+    },
+  );
+
+  server.registerTool(
+    "get_scheduler_status",
+    {
+      title: "Get scheduler (NeedleNine) status",
+      description:
+        "Report whether the flight-school scheduler integration is configured (provider, login email, portal URL, " +
+        "timezone), where credentials would be read from (macOS keychain / env), and whether a Playwright " +
+        "browser is available - with setup steps when something is missing. Never returns secrets.",
+      inputSchema: {},
+    },
+    async (): Promise<CallToolResult> => {
+      const profile = await loadProfile(profileFile);
+      return jsonResult(await schedulerStatus(profile));
     },
   );
 

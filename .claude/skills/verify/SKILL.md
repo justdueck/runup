@@ -33,9 +33,9 @@ Speak newline-delimited JSON-RPC on stdin. Minimal sequence:
 
 1. `initialize` (`protocolVersion: "2025-06-18"`) → expect `serverInfo.name === "runup"`.
 2. `notifications/initialized` (no id).
-3. `tools/list` → 8 tools: `get_profile`, `update_profile`, `get_free_windows`,
-   `get_conditions`, `get_aircraft_availability`, `plan_routes`, `plan_day`,
-   `export_foreflight`
+3. `tools/list` → 9 tools: `get_profile`, `update_profile`, `get_free_windows`,
+   `get_conditions`, `get_aircraft_availability`, `get_scheduler_status`,
+   `plan_routes`, `plan_day`, `export_foreflight`
    (the two profile tools carry `_meta.ui.resourceUri = ui://runup/profile-form.html`).
 4. `tools/call get_profile` → default `homeAirports: ["KPAE", "KTIW"]`.
 5. `tools/call update_profile` with a patch, then check
@@ -44,8 +44,13 @@ Speak newline-delimited JSON-RPC on stdin. Minimal sequence:
 6. `resources/read ui://runup/profile-form.html` → single self-contained HTML
    (`text/html;profile=mcp-app`); if it says "form not built", `npm run build`
    didn't inline the View.
-7. `get_free_windows` / `get_aircraft_availability` / `plan_routes` /
-   `plan_day` run entirely on fixtures + the bundled airport sample.
+7. `get_free_windows` / `plan_routes` / `plan_day` run on fixtures + the
+   bundled airport sample. `get_scheduler_status` → `configured: false` with
+   setup notes (no secret values), and `get_aircraft_availability` returns
+   fixture data whose `notes` include the "No flight-school scheduler is
+   configured" pointer (the NeedleNine portal is only driven when the profile
+   has a `scheduler` block — do not add one when verifying against a scratch
+   profile unless you also mock the portal).
 8. `tools/call export_foreflight` with `{"route": ["KPAE", "KAWO", "KPAE"]}` →
    a `foreflightmobile://maps/search?q=...` deep link, plus a Garmin `.fpl`
    written to `$RUNUP_HOME/exports/` whose XML matches the returned `fpl.xml`;
@@ -69,3 +74,10 @@ kill the server.
   (Node >= 22.21).
 - Fixture calendar windows are generated relative to server start time, so
   window timestamps differ between runs.
+- The NeedleNine provider imports `playwright` lazily: the server must start
+  and answer `tools/list` even when the browser is not installed; the
+  browser is only launched by a configured availability query. The mock-portal
+  Playwright e2e (`tests/needlenine/portal.e2e.test.ts`) needs a chromium
+  binary (`npx playwright install chromium`, or `PLAYWRIGHT_BROWSERS_PATH` /
+  `RUNUP_CHROMIUM_PATH` pointing at one) and prints a `SKIPPED` warning if
+  none can launch.

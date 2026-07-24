@@ -4,12 +4,14 @@
  * Persists a single JSON document at:
  *   ${RUNUP_HOME:-~/.runup}/profile.json
  *
- * Scheduler/flight-school credentials must never be written here — see the
- * TODO stub at the bottom of this file for the intended OS-keychain approach.
- * The one sensitive value the profile MAY hold is `calendar.icalUrls`
- * (private iCal feed URLs, a fallback for the RUNUP_ICAL_URLS env var); it
- * is redacted from every tool result via {@link redactProfile}, and this file
- * lives outside the repo (${RUNUP_HOME:-~/.runup}) and is gitignored.
+ * Two kinds of sensitive/near-sensitive values can appear here:
+ * - `calendar.icalUrls` (private iCal feed URLs, a fallback for the
+ *   RUNUP_ICAL_URLS env var) are bearer secrets: they are redacted from every
+ *   tool result via {@link redactProfile}, and this file lives outside the
+ *   repo (${RUNUP_HOME:-~/.runup}) and is gitignored.
+ * - The optional `scheduler` block holds only the NeedleNine login *email*
+ *   and portal settings, never the password — that lives in the macOS
+ *   keychain (or an env var); see src/providers/needlenine/credentials.ts.
  */
 import { promises as fs } from "node:fs";
 import os from "node:os";
@@ -131,6 +133,49 @@ export const CalendarConfigSchema = z.object({
 });
 export type CalendarConfig = z.infer<typeof CalendarConfigSchema>;
 
+/**
+ * The profile is writable by any chat via `update_profile`, and the portal
+ * session types the keychain password into whatever page `portalUrl` points
+ * at — so the profile may only select NeedleNine-owned https hosts, never an
+ * arbitrary URL (credential-exfiltration guard). Operators who need a
+ * different host (local mock, staging) set the trusted
+ * RUNUP_NEEDLENINE_PORTAL_URL environment variable on the server instead.
+ */
+export const NeedleNinePortalUrlSchema = z.url().refine(
+  (value) => {
+    try {
+      const url = new URL(value);
+      return url.protocol === "https:" && (url.hostname === "needlenine.com" || url.hostname.endsWith(".needlenine.com"));
+    } catch {
+      return false;
+    }
+  },
+  {
+    message:
+      "portalUrl must be an https needlenine.com URL; for a local/staging portal set " +
+      "RUNUP_NEEDLENINE_PORTAL_URL in the server environment instead",
+  },
+);
+
+/**
+ * Flight-school scheduler connection (currently only NeedleNine). Holds the
+ * login *email* and portal settings — never the password, which is read
+ * from the macOS keychain (service "runup-needlenine", account = email) or
+ * the RUNUP_NEEDLENINE_PASSWORD environment variable at runtime.
+ */
+export const SchedulerConfigSchema = z.object({
+  provider: z.literal("needlenine"),
+  /** NeedleNine login email (also the keychain account name). Not a secret. */
+  email: z.email(),
+  /** Portal origin override; must stay on needlenine.com (default https://portal.needlenine.com). */
+  portalUrl: NeedleNinePortalUrlSchema.optional(),
+  /** School timezone (IANA), used for schedule day boundaries. Default America/Los_Angeles. */
+  timezone: z.string().trim().min(1).optional(),
+  /** Tenant id path segment; auto-detected after login, set only if that detection fails. */
+  tenantId: z.string().trim().min(1).optional(),
+});
+export type SchedulerConfig = z.infer<typeof SchedulerConfigSchema>;
+
 export const ProfileSchema = z.object({
   schemaVersion: z.literal(PROFILE_SCHEMA_VERSION),
   homeAirports: HomeAirportsSchema,
@@ -140,6 +185,8 @@ export const ProfileSchema = z.object({
   preferences: PreferencesSchema,
   // Defaulted so profile.json files written before the calendar leg still validate.
   calendar: CalendarConfigSchema.default(() => defaultCalendarConfig()),
+  /** Optional scheduler connection; absent/null = not configured (fixture availability). */
+  scheduler: SchedulerConfigSchema.nullish(),
 });
 export type Profile = z.infer<typeof ProfileSchema>;
 
@@ -148,7 +195,8 @@ export type Profile = z.infer<typeof ProfileSchema>;
  * blocks individually partial. `schemaVersion` is intentionally not patchable.
  * Arrays (`homeAirports`, `aircraft`, `calendar.icalUrls`), when present,
  * replace the whole list (simplest predictable rule). Patch fields never
- * carry defaults, so an omitted field always means "leave unchanged".
+ * carry defaults, so an omitted field always means "leave unchanged";
+ * `scheduler: null` removes the scheduler block.
  */
 export const ProfilePatchSchema = z
   .object({
@@ -171,6 +219,7 @@ export const ProfilePatchSchema = z
         latestLocalTime: LocalTimeSchema.optional(),
       })
       .optional(),
+    scheduler: SchedulerConfigSchema.nullish(),
     calendar: z
       .object({
         icalUrls: z
@@ -384,21 +433,4 @@ function deepMerge(base: Record<string, unknown>, patch: Record<string, unknown>
     }
   }
   return base;
-}
-
-/**
- * TODO(credentials): flight-school scheduler credentials.
- *
- * NOT implemented on purpose. Credentials must never be stored in
- * profile.json (that file is plain text, meant to be readable/portable).
- * The plan is to keep them in the OS keychain — macOS Keychain via the
- * `security` CLI / Keychain Services, Windows Credential Manager, or
- * libsecret on Linux (a small cross-platform module such as `keytar` or the
- * platform CLIs). The NeedleNineProvider will call this to fetch the
- * NeedleNine portal email/password (or a session token) at runtime.
- */
-export async function getSchedulerCredentials(): Promise<never> {
-  throw new Error(
-    "Scheduler credential storage is not implemented yet: use the OS keychain, never profile.json.",
-  );
 }
