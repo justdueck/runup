@@ -33,8 +33,9 @@ Speak newline-delimited JSON-RPC on stdin. Minimal sequence:
 
 1. `initialize` (`protocolVersion: "2025-06-18"`) → expect `serverInfo.name === "runup"`.
 2. `notifications/initialized` (no id).
-3. `tools/list` → 7 tools: `get_profile`, `update_profile`, `get_free_windows`,
-   `get_conditions`, `get_aircraft_availability`, `plan_routes`, `plan_day`
+3. `tools/list` → 8 tools: `get_profile`, `update_profile`, `get_free_windows`,
+   `get_conditions`, `get_aircraft_availability`, `plan_routes`, `plan_day`,
+   `export_foreflight`
    (the two profile tools carry `_meta.ui.resourceUri = ui://runup/profile-form.html`).
 4. `tools/call get_profile` → default `homeAirports: ["KPAE", "KTIW"]`.
 5. `tools/call update_profile` with a patch, then check
@@ -45,6 +46,12 @@ Speak newline-delimited JSON-RPC on stdin. Minimal sequence:
    didn't inline the View.
 7. `get_free_windows` / `get_aircraft_availability` / `plan_routes` /
    `plan_day` run entirely on fixtures + the bundled airport sample.
+8. `tools/call export_foreflight` with `{"route": ["KPAE", "KAWO", "KPAE"]}` →
+   a `foreflightmobile://maps/search?q=...` deep link, plus a Garmin `.fpl`
+   written to `$RUNUP_HOME/exports/` whose XML matches the returned `fpl.xml`;
+   an identifier missing from the bundled sample keeps the link but returns
+   `fpl: null` with a note. `plan_routes`/`plan_day` candidates each carry a
+   `foreflight.openUrl` deep link.
 
 Probe off-happy-path inputs too: an invalid `update_profile` patch (e.g.
 negative `ceilingFt`) and a malformed date to `get_free_windows` must come

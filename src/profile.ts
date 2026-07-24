@@ -16,6 +16,7 @@ import os from "node:os";
 import path from "node:path";
 import { z } from "zod";
 import { isValidTimeZone } from "./tz.js";
+import { writeFileAtomic } from "./util.js";
 
 export const PROFILE_SCHEMA_VERSION = 1 as const;
 
@@ -315,29 +316,14 @@ export async function saveProfile(profile: Profile, filePath: string = profilePa
 }
 
 /**
- * Validate and atomically write the profile: pretty JSON to a unique temp
- * file, then rename over `filePath` so readers never see a partial write.
- * Callers must hold the file's save queue ({@link enqueueSave}).
+ * Validate and atomically write the profile as pretty JSON so readers never
+ * see a partial write. Callers must hold the file's save queue
+ * ({@link enqueueSave}).
  */
 async function writeProfileFile(profile: Profile, filePath: string): Promise<Profile> {
   const valid = validateProfile(profile);
-  await fs.mkdir(path.dirname(filePath), { recursive: true });
-  const tmp = `${filePath}.tmp-${process.pid}-${nextTmpId()}`;
-  try {
-    await fs.writeFile(tmp, `${JSON.stringify(valid, null, 2)}\n`, "utf8");
-    await fs.rename(tmp, filePath);
-  } catch (err) {
-    await fs.rm(tmp, { force: true }).catch(() => {});
-    throw err;
-  }
+  await writeFileAtomic(filePath, `${JSON.stringify(valid, null, 2)}\n`);
   return valid;
-}
-
-/** Monotonic per-process counter so overlapping saves never share a temp filename. */
-let tmpCounter = 0;
-function nextTmpId(): number {
-  tmpCounter += 1;
-  return tmpCounter;
 }
 
 /**

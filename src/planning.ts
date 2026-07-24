@@ -5,10 +5,11 @@
 import { summarizeMetar, summarizeTaf, type AviationWeatherClient, type ConditionSummary, type TafSummary } from "./weather.js";
 import { scoreConditions, type ScoreResult, type TimeOfDay } from "./scoring.js";
 import { tagWindowsWithDaylight } from "./daylight.js";
+import { withForeflight, type RouteCandidateWithForeflight } from "./foreflight.js";
 import type { Profile } from "./profile.js";
 import type { Providers } from "./providers/types.js";
 import { addDays, compareLocalDates, parseLocalDate, zonedTimeToUtc } from "./tz.js";
-import type { AircraftAvailability, AircraftPerformance, DateRange, RouteCandidate, TimeWindow } from "./types.js";
+import type { AircraftAvailability, AircraftPerformance, DateRange, TimeWindow } from "./types.js";
 
 /** Generic light-single performance used when the profile has no usable aircraft. */
 export const GENERIC_AIRCRAFT: AircraftPerformance = {
@@ -42,7 +43,7 @@ export interface PlannedWindow {
   availability: AircraftAvailability | null;
   aircraft: AircraftPerformance;
   aircraftNotes: string[];
-  routes: RouteCandidate[];
+  routes: RouteCandidateWithForeflight[];
   notes: string[];
 }
 
@@ -101,7 +102,7 @@ export async function planDay(input: PlanDayInput, deps: PlanningDeps): Promise<
     const { aircraft, notes: aircraftNotes } = resolveAircraftPerformance(profile, {
       availableTails: availability?.availableTails,
     });
-    const routes = await providers.routes.planRoutes(window, aircraft, profile);
+    const routes = (await providers.routes.planRoutes(window, aircraft, profile)).map(withForeflight);
     if (noGoHomes.length > 0) {
       windowNotes.push(
         `Current conditions are below personal minimums at ${noGoHomes.join(", ")} - routes departing there are for planning only.`,
