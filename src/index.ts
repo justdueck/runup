@@ -34,6 +34,7 @@ async function main(): Promise<void> {
 }
 
 main().catch((err) => {
-  console.error("fatal:", err instanceof Error ? err.message : String(err));
+  // Full error (with stack) - this goes to the host's stderr log, not the model.
+  console.error("fatal:", err);
   process.exit(1);
 });
