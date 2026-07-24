@@ -53,7 +53,9 @@ composes calendar / aircraft-availability / route providers into planning tools
 - `src/profile.ts` — zod schemas, defaults, and the store at
   `${RUNUP_HOME:-~/.runup}/profile.json` (missing file loads as defaults). Patch semantics:
   objects deep-merge, arrays/scalars replace, `schemaVersion` is not patchable, the patch
-  schema is `.strict()`. Writes are validated, atomic (temp file + rename), and serialized
+  schema is `.strict()`. Exception: keys in `REPLACE_WHOLESALE_KEYS` (currently
+  `scheduler`) are connection descriptors replaced wholesale, never deep-merged —
+  a stale tenantId/portalUrl must not survive an account switch. Writes are validated, atomic (temp file + rename), and serialized
   per file through a save queue. Credentials go to the OS keychain, never in the
   profile — see `resolveNeedleNineCredentials()` in `src/providers/needlenine/credentials.ts`.
 - `src/weather.ts` — aviationweather.gov Data API client behind the `HttpJsonFetcher`
@@ -89,8 +91,9 @@ composes calendar / aircraft-availability / route providers into planning tools
   `InMemoryTransport`), read `tests/fixtures/*.json`, and use `mkdtemp` dirs for profiles.
 - Keep pure logic pure and unit-tested: `scoring.ts`, `geo.ts`, `util.ts`,
   `ui/profile-patch.ts` do no I/O.
-- Profile arrays (`homeAirports`, `aircraft`) are replaced wholesale by a patch; nested
-  objects merge. Keep those semantics identical in `profile.ts` and the View patch builder.
+- Profile arrays (`homeAirports`, `aircraft`) and the `scheduler` block are replaced
+  wholesale by a patch; other nested objects merge. Keep those semantics identical in
+  `profile.ts` and the View patch builder.
 - No secrets — calendar iCal URLs, scheduler credentials, tokens — in the repo,
   `profile.json` (beyond the redacted `calendar.icalUrls` fallback), logs, tool output, or
   error messages. Scheduler credentials belong in the OS keychain behind

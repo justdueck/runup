@@ -80,6 +80,24 @@ describe("scheduler config resolution", () => {
     expect(cleared.scheduler ?? null).toBeNull();
     expect(resolveSchedulerConfig(cleared, {})).toBeNull();
   });
+
+  it("replaces the scheduler block wholesale so switching accounts drops stale portal fields", () => {
+    const schoolA = applyProfilePatch(defaultProfile(), {
+      scheduler: {
+        provider: "needlenine",
+        email: "old@a.test",
+        portalUrl: "https://a.needlenine.com",
+        timezone: "America/Denver",
+        tenantId: "school-a-uuid",
+      },
+    });
+    const schoolB = applyProfilePatch(schoolA, { scheduler: { provider: "needlenine", email: "new@b.test" } });
+    // No deep merge: the old tenant/portal/timezone must NOT survive the switch.
+    expect(schoolB.scheduler).toEqual({ provider: "needlenine", email: "new@b.test" });
+    const cfg = resolveSchedulerConfig(schoolB, {});
+    expect(cfg?.portalUrl).toBe(DEFAULT_PORTAL_URL);
+    expect(cfg?.tenantId).toBeUndefined();
+  });
 });
 
 describe("schedulerStatus (secret-free)", () => {

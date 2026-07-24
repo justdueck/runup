@@ -110,7 +110,8 @@ describe("NeedleNineProvider (fake session)", () => {
 
     expect(openSession).toHaveBeenCalledOnce();
     expect(resolveCredentials).toHaveBeenCalledOnce();
-    expect(session.fetched).toEqual([day]);
+    // One lookback day is fetched so overnight blocks from the previous local day are visible.
+    expect(session.fetched).toEqual(["2026-07-23", day]);
     expect(result.source).toBe("needlenine");
     expect(result.availableTails).toEqual(["N22222"]);
     expect(result.tails?.map((t) => [t.tail, t.status])).toEqual([
@@ -131,7 +132,7 @@ describe("NeedleNineProvider (fake session)", () => {
     const { provider, session } = newProvider({});
     const window = makeWindow(new Date(at(day, "22:00")), new Date(at("2026-07-26", "01:00")));
     await provider.getAircraftAvailability(window);
-    expect(session.fetched).toEqual(["2026-07-24", "2026-07-25", "2026-07-26"]);
+    expect(session.fetched).toEqual(["2026-07-23", "2026-07-24", "2026-07-25", "2026-07-26"]);
   });
 
   it("returns a note (and never opens a browser) when no tails are checked out", async () => {
@@ -186,6 +187,103 @@ describe("NeedleNineProvider (fake session)", () => {
     await expect(provider.getAircraftAvailability(window)).rejects.toThrow(
       /^NeedleNine availability lookup failed: socket hang up while sending \[redacted\]$/,
     );
+  });
+
+  it("sees an overnight block that started the previous local day", async () => {
+    const prev = "2026-07-23";
+    const days = new Map([
+      [
+        prev,
+        projectScheduleRecords([
+          // Maintenance 22:00 (prev day) -> 10:00 (query day), tenant-local; lives in prev day's payload.
+          rawAppointment({
+            IA_ID: 7,
+            IA_AIRCRAFT_ID: 101,
+            IA_START_TIME: stamp(prev, "22:00"),
+            IA_END_TIME: stamp(day, "10:00"),
+            IA_FLIGHT_TYPE: 3,
+          }),
+        ]),
+      ],
+    ]);
+    const { provider } = newProvider({ session: new FakeSession(roster, days), now: at(day, "07:00") });
+    const window = makeWindow(new Date(at(day, "08:00")), new Date(at(day, "12:00")));
+    const result = await provider.getAircraftAvailability(window);
+    const n11111 = result.tails?.find((t) => t.tail === "N11111");
+    expect(n11111?.status).toBe("partially-available");
+    expect(n11111?.blocks.map((b) => b.kind)).toEqual(["maintenance"]);
+    expect(n11111?.free.map((f) => [f.startLocal, f.endLocal])).toEqual([[`${day} 10:00`, `${day} 12:00`]]);
+  });
+
+  it("a config change while a session is opening never serves the old account", async () => {
+    let releaseFirst!: () => void;
+    const firstGate = new Promise<void>((resolve) => (releaseFirst = resolve));
+    const first = new FakeSession(roster, new Map());
+    const second = new FakeSession(roster, new Map());
+    const open = vi
+      .fn()
+      .mockImplementationOnce(async () => {
+        await firstGate; // slow login for config A
+        return first;
+      })
+      .mockResolvedValueOnce(second);
+
+    const profileA = schedulerProfile();
+    const profileB = validateProfile({
+      ...schedulerProfile(),
+      scheduler: { provider: "needlenine", email: "other@example.com", timezone: TZ },
+    });
+    let profile = profileA;
+    const provider = new NeedleNineProvider({
+      loadProfile: async () => profile,
+      resolveCredentials: async () => ({ email: "x", password: new Secret(PASSWORD), source: "env" as const }),
+      openSession: open,
+      env: {},
+    });
+    const window = makeWindow(new Date(at(day, "09:00")), new Date(at(day, "10:00")));
+
+    const callA = provider.getAircraftAvailability(window).then(
+      (r) => ({ ok: r }),
+      (e: unknown) => ({ err: e as Error }),
+    );
+    await Promise.resolve(); // let call A reach its (gated) open
+    profile = profileB; // "update_profile" switches accounts mid-login
+    const callB = provider.getAircraftAvailability(window);
+    releaseFirst();
+
+    const resultB = await callB;
+    expect(resultB.source).toBe("needlenine"); // B used the session opened for B's config
+    expect(open).toHaveBeenCalledTimes(2);
+    const outcomeA = await callA;
+    // A must NOT have silently used the wrong session: it either failed with a
+    // retryable error or (if it won the race before the switch) succeeded on its own session.
+    if ("err" in outcomeA) expect(outcomeA.err.message).toMatch(/closed while opening|try again/);
+    // The abandoned first session is closed, not orphaned.
+    await new Promise((r) => setTimeout(r, 0));
+    expect(first.disposed).toBe(true);
+    expect(second.disposed).toBe(false);
+    await provider.dispose();
+    expect(second.disposed).toBe(true);
+  });
+
+  it("dispose during an in-flight open closes the session it produces", async () => {
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => (release = resolve));
+    const session = new FakeSession(roster, new Map());
+    const open = vi.fn().mockImplementation(async () => {
+      await gate;
+      return session;
+    });
+    const { provider } = newProvider({ open: () => open() });
+    const window = makeWindow(new Date(at(day, "09:00")), new Date(at(day, "10:00")));
+    const call = provider.getAircraftAvailability(window).catch((e: unknown) => e as Error);
+    await Promise.resolve();
+    const disposed = provider.dispose();
+    release();
+    await disposed;
+    expect(session.disposed).toBe(true); // no orphaned browser
+    const outcome = await call;
+    expect(outcome).toBeInstanceOf(NeedleNineError);
   });
 
   it("recreates the session after dispose or when it dies", async () => {
@@ -244,7 +342,7 @@ describe("SchedulerAvailabilityProvider (delegating)", () => {
     const result = await provider.getAircraftAvailability(window);
     expect(result.source).toBe("needlenine");
     expect(result.availableTails).toEqual(["N11111", "N22222"]);
-    expect(session.fetched).toEqual([day]);
+    expect(session.fetched).toEqual(["2026-07-23", day]);
     await provider.dispose();
     expect(session.disposed).toBe(true);
   });

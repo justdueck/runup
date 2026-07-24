@@ -3,11 +3,12 @@
  *
  * The portal stores every appointment stamp as a naive UTC string
  * ("YYYY-MM-DD HH:mm:ss", no offset) while the schedule UI works in the
- * school's tenant timezone (an IANA name, default America/Los_Angeles). These
- * helpers convert between the two without pulling in a date library: naive
- * UTC parsing, "which local calendar dates does this window touch", and a
- * local wall-clock -> UTC conversion used by tests/fixtures.
+ * school's tenant timezone (an IANA name, default America/Los_Angeles).
+ * Portal-stamp parsing lives here; all zone/date arithmetic delegates to the
+ * shared helpers in src/tz.ts so DST edge-case behavior can never diverge
+ * between the calendar and scheduler providers.
  */
+import { addDays, compareLocalDates, formatLocalDate, formatLocalHm, localParts, parseLocalDate, zonedTimeToUtc } from "../../tz.js";
 
 export const DEFAULT_TENANT_TIMEZONE = "America/Los_Angeles";
 
@@ -45,100 +46,38 @@ export function parseNaiveUtc(stamp: string | null | undefined): number | null {
   return ms;
 }
 
-/** Cache formatters per timezone (Intl construction is comparatively slow). */
-const partsFormatters = new Map<string, Intl.DateTimeFormat>();
-
-function partsFormatter(timeZone: string): Intl.DateTimeFormat {
-  let fmt = partsFormatters.get(timeZone);
-  if (!fmt) {
-    fmt = new Intl.DateTimeFormat("en-US", {
-      timeZone,
-      calendar: "iso8601",
-      year: "numeric",
-      month: "2-digit",
-      day: "2-digit",
-      hour: "2-digit",
-      minute: "2-digit",
-      second: "2-digit",
-      hourCycle: "h23",
-    });
-    partsFormatters.set(timeZone, fmt);
-  }
-  return fmt;
-}
-
-/** Wall-clock parts of an instant in the given IANA timezone. */
-export function zonedParts(
-  epochMs: number,
-  timeZone: string,
-): { year: number; month: number; day: number; hour: number; minute: number; second: number } {
-  const parts = partsFormatter(timeZone).formatToParts(new Date(epochMs));
-  const get = (type: Intl.DateTimeFormatPartTypes): number => {
-    const raw = parts.find((p) => p.type === type)?.value ?? "0";
-    return Number(raw);
-  };
-  return {
-    year: get("year"),
-    month: get("month"),
-    day: get("day"),
-    hour: get("hour"),
-    minute: get("minute"),
-    second: get("second"),
-  };
-}
-
-/** Offset (ms) of `timeZone` from UTC at the given instant: local = utc + offset. */
-export function timezoneOffsetMs(epochMs: number, timeZone: string): number {
-  const p = zonedParts(epochMs, timeZone);
-  const asIfUtc = Date.UTC(p.year, p.month - 1, p.day, p.hour, p.minute, p.second);
-  return asIfUtc - Math.trunc(epochMs / 1000) * 1000;
-}
-
 /** Calendar date "YYYY-MM-DD" of an instant in the given IANA timezone. */
 export function localDateOf(epochMs: number, timeZone: string): string {
-  const p = zonedParts(epochMs, timeZone);
-  return `${p.year}-${pad2(p.month)}-${pad2(p.day)}`;
+  return formatLocalDate(localParts(new Date(epochMs), timeZone));
 }
 
 /** "YYYY-MM-DD HH:mm" wall clock of an instant in the timezone (for human-facing output). */
 export function formatLocalDateTime(epochMs: number, timeZone: string): string {
-  const p = zonedParts(epochMs, timeZone);
-  return `${p.year}-${pad2(p.month)}-${pad2(p.day)} ${pad2(p.hour)}:${pad2(p.minute)}`;
+  const at = new Date(epochMs);
+  return `${formatLocalDate(localParts(at, timeZone))} ${formatLocalHm(at, timeZone)}`;
 }
 
 /**
- * Convert a tenant-local wall-clock ("YYYY-MM-DD" + "HH:mm") into the UTC
- * instant it names. Resolves the zone offset iteratively so DST transitions
- * land correctly (ambiguous fall-back hours resolve to the earlier instant).
+ * Convert a tenant-local wall-clock ("YYYY-MM-DD" + "HH:mm[:ss]") into the
+ * UTC instant it names (DST transitions handled by tz.zonedTimeToUtc).
  */
 export function zonedDateTimeToUtcMs(date: string, time: string, timeZone: string): number {
-  const dm = /^(\d{4})-(\d{2})-(\d{2})$/.exec(date.trim());
   const tm = /^(\d{2}):(\d{2})(?::(\d{2}))?$/.exec(time.trim());
-  if (!dm || !tm) throw new Error(`expected "YYYY-MM-DD" + "HH:mm", got "${date}" "${time}"`);
-  const naiveUtc = Date.UTC(Number(dm[1]), Number(dm[2]) - 1, Number(dm[3]), Number(tm[1]), Number(tm[2]), Number(tm[3] ?? 0));
-  // First guess treats the wall clock as UTC, then correct by the zone offset at that instant (twice).
-  let instant = naiveUtc - timezoneOffsetMs(naiveUtc, timeZone);
-  instant = naiveUtc - timezoneOffsetMs(instant, timeZone);
-  return instant;
+  if (!tm) throw new Error(`expected "HH:mm[:ss]", got "${time}"`);
+  return zonedTimeToUtc(
+    { ...parseLocalDate(date.trim()), hour: Number(tm[1]), minute: Number(tm[2]), second: Number(tm[3] ?? 0) },
+    timeZone,
+  ).getTime();
 }
 
 /** Add whole days to a "YYYY-MM-DD" date string (calendar arithmetic, no timezone involved). */
 export function addDaysToDate(date: string, days: number): string {
-  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(date.trim());
-  if (!m) throw new Error(`expected "YYYY-MM-DD", got "${date}"`);
-  const ms = Date.UTC(Number(m[1]), Number(m[2]) - 1, Number(m[3]) + days, 12, 0, 0);
-  const d = new Date(ms);
-  return `${d.getUTCFullYear()}-${pad2(d.getUTCMonth() + 1)}-${pad2(d.getUTCDate())}`;
+  return formatLocalDate(addDays(parseLocalDate(date.trim()), days));
 }
 
 /** Whole calendar days from date `a` to date `b` (b - a); both "YYYY-MM-DD". */
 export function diffCalendarDays(a: string, b: string): number {
-  const toDayNumber = (d: string): number => {
-    const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(d.trim());
-    if (!m) throw new Error(`expected "YYYY-MM-DD", got "${d}"`);
-    return Math.floor(Date.UTC(Number(m[1]), Number(m[2]) - 1, Number(m[3])) / 86_400_000);
-  };
-  return toDayNumber(b) - toDayNumber(a);
+  return compareLocalDates(parseLocalDate(b.trim()), parseLocalDate(a.trim())) / 86_400_000;
 }
 
 /**
@@ -155,6 +94,3 @@ export function localDatesSpanning(startMs: number, endMs: number, timeZone: str
   return dates;
 }
 
-function pad2(n: number): string {
-  return String(n).padStart(2, "0");
-}

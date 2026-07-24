@@ -197,7 +197,8 @@ export function createServer(deps: ServerDeps = {}): McpServer {
       title: "Update pilot profile",
       description:
         "Apply a partial update (deep merge) to the pilot profile and persist it. Nested objects merge; " +
-        "arrays such as `homeAirports`, `aircraft`, and `calendar.icalUrls` are replaced wholesale. Returns " +
+        "arrays such as `homeAirports`, `aircraft`, and `calendar.icalUrls` are replaced wholesale, and so is " +
+        "the whole `scheduler` block (include every field you want kept; `scheduler: null` removes it). Returns " +
         "the full updated profile with iCal feed URLs redacted (redacted placeholders sent back are ignored). " +
         "Never put credentials here; prefer the RUNUP_ICAL_URLS env var for the calendar feed.",
       inputSchema: { patch: ProfilePatchSchema.describe("Partial profile: only the fields to change.") },

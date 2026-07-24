@@ -141,7 +141,11 @@ export function formatLocalHm(date: Date, timeZone: string): string {
   return `${String(p.hour).padStart(2, "0")}:${String(p.minute).padStart(2, "0")}`;
 }
 
-/** Compare two local dates: negative when a < b, 0 when equal, positive when a > b. */
+/**
+ * Compare two local dates: negative when a < b, 0 when equal, positive when
+ * a > b. Guaranteed to be the exact difference in milliseconds between the
+ * two dates' UTC midnights (so `/ 86_400_000` yields whole calendar days).
+ */
 export function compareLocalDates(a: LocalDateParts, b: LocalDateParts): number {
   return Date.UTC(a.year, a.month - 1, a.day) - Date.UTC(b.year, b.month - 1, b.day);
 }

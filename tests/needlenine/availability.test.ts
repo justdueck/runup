@@ -4,12 +4,11 @@ import {
   busyBlocksForAircraft,
   computeAvailability,
   matchTailsToRoster,
-  mergeIntervals,
   normalizeTailNumber,
   rosterFlags,
-  subtractIntervals,
   tailCandidates,
 } from "../../src/providers/needlenine/availability.js";
+import { mergeIntervals, subtractIntervals } from "../../src/intervals.js";
 import { projectRosterRecords, projectScheduleRecords } from "../../src/providers/needlenine/site.js";
 import { zonedDateTimeToUtcMs } from "../../src/providers/needlenine/time.js";
 import { makeWindow } from "../../src/types.js";

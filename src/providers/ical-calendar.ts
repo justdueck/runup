@@ -39,11 +39,8 @@ import type { CalendarProvider } from "./types.js";
 /** Env var carrying comma-separated private iCal feed URLs (takes precedence over the profile). */
 export const ICAL_URLS_ENV = "RUNUP_ICAL_URLS";
 
-/** A half-open [start, end) instant interval in epoch milliseconds. */
-export interface Interval {
-  start: number;
-  end: number;
-}
+// Interval math is shared with the availability providers (see src/intervals.ts).
+import { mergeIntervals, subtractIntervals, type Interval } from "../intervals.js";
 
 /** Everything the provider needs from the profile, snapshotted per call. */
 export interface IcalCalendarSettings {
@@ -249,38 +246,6 @@ function allDayInterval(instance: EventInstance, timeZone: string): Interval {
 function isTransparent(event: VEvent): boolean {
   const t = event.transparency;
   return typeof t === "string" && t.toUpperCase() === "TRANSPARENT";
-}
-
-// --- Interval math (exported for unit tests) --------------------------------------
-
-/** Sort + merge overlapping (or touching) intervals. */
-export function mergeIntervals(intervals: Interval[]): Interval[] {
-  const sorted = intervals.filter((i) => i.end > i.start).sort((a, b) => a.start - b.start);
-  const merged: Interval[] = [];
-  for (const interval of sorted) {
-    const last = merged[merged.length - 1];
-    if (last && interval.start <= last.end) last.end = Math.max(last.end, interval.end);
-    else merged.push({ ...interval });
-  }
-  return merged;
-}
-
-/** `free` minus every busy interval (busy need not be pre-merged). Result is sorted. */
-export function subtractIntervals(free: Interval, busy: Interval[]): Interval[] {
-  let pieces: Interval[] = [{ ...free }];
-  for (const b of mergeIntervals(busy)) {
-    const next: Interval[] = [];
-    for (const p of pieces) {
-      if (b.end <= p.start || b.start >= p.end) {
-        next.push(p); // no overlap
-        continue;
-      }
-      if (b.start > p.start) next.push({ start: p.start, end: b.start });
-      if (b.end < p.end) next.push({ start: b.end, end: p.end });
-    }
-    pieces = next;
-  }
-  return pieces;
 }
 
 /**
