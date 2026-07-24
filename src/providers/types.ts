@@ -1,8 +1,8 @@
 /**
- * Provider interfaces. Concrete data sources (Google Calendar, the flight
- * school's scheduler, FAA airport data) are unknown or not wired up yet, so
- * everything the planner needs sits behind these small interfaces with
- * fixture implementations for now.
+ * Provider interfaces. Data sources sit behind these small interfaces with
+ * fixture implementations for tests / not-yet-wired sources: the calendar
+ * has a real iCal implementation (providers/ical-calendar.ts); the flight
+ * school's scheduler and FAA airport data are still fixtures/placeholders.
  */
 import type { Profile } from "../profile.js";
 import type {

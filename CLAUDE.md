@@ -31,19 +31,31 @@ composes calendar / aircraft-availability / route providers into planning tools
 
 - `src/index.ts` — stdio entry point; connects `createServer()` to `StdioServerTransport`.
   Never write to stdout — log with `console.error`.
-- `src/server.ts` — `createServer(deps)`: registers the 8 tools (`get_profile`,
+- `src/server.ts` — `createServer(deps)`: registers the 9 tools (`get_profile`,
   `update_profile`, `get_free_windows`, `get_conditions`, `get_aircraft_availability`,
-  `plan_routes`, `plan_day`, `export_foreflight`) plus the
+  `get_scheduler_status`, `plan_routes`, `plan_day`, `export_foreflight`) plus the
   `ui://runup/profile-form.html` App resource. Deps
-  (profile path, providers, weather client, UI loader) are injectable so tests construct
-  the server on fixtures. `jsonResult()` = text + `structuredContent`; `errorResult()` =
-  `isError: true`.
+  (profile path, providers, weather client, UI loader, ICS fetcher, env) are injectable so
+  tests construct the server on fixtures. `jsonResult()` = text + `structuredContent`;
+  `errorResult()` = `isError: true`. The calendar source is selected per request:
+  the iCal provider when `RUNUP_ICAL_URLS` or the profile's `calendar.icalUrls` is set,
+  the fixture provider (with a setup note) otherwise. iCal URLs are bearer secrets:
+  redacted from every tool result, and error text is scrubbed before it leaves the server.
+- `src/providers/ical-calendar.ts` + `src/tz.ts` + `src/daylight.ts` — ICS feed download
+  and recurrence expansion (node-ical), IANA-zone date math, and day/night/mixed window
+  tagging (suncalc).
+- `src/providers/needlenine/` — read-only NeedleNine portal automation (Playwright) behind
+  `SchedulerAvailabilityProvider`; all portal-specific knowledge lives in `site.ts`.
+  Credentials: email in the profile `scheduler` block, password in the macOS keychain or
+  `RUNUP_NEEDLENINE_PASSWORD`. The profile's `scheduler.portalUrl` is allowlisted to https
+  needlenine.com hosts (credential-exfiltration guard); `RUNUP_NEEDLENINE_PORTAL_URL` is
+  the trusted operator override and takes precedence.
 - `src/profile.ts` — zod schemas, defaults, and the store at
   `${RUNUP_HOME:-~/.runup}/profile.json` (missing file loads as defaults). Patch semantics:
   objects deep-merge, arrays/scalars replace, `schemaVersion` is not patchable, the patch
   schema is `.strict()`. Writes are validated, atomic (temp file + rename), and serialized
-  per file through a save queue. `getSchedulerCredentials()` is a deliberate stub —
-  credentials go to the OS keychain, never in the profile.
+  per file through a save queue. Credentials go to the OS keychain, never in the
+  profile — see `resolveNeedleNineCredentials()` in `src/providers/needlenine/credentials.ts`.
 - `src/weather.ts` — aviationweather.gov Data API client behind the `HttpJsonFetcher`
   interface (`NodeFetcher` = global fetch with a 10 s timeout), tolerant `looseObject`
   schemas, METAR to `ConditionSummary`, TAF summary, crosswind and flight-category helpers.
@@ -80,20 +92,15 @@ composes calendar / aircraft-availability / route providers into planning tools
 - Profile arrays (`homeAirports`, `aircraft`) are replaced wholesale by a patch; nested
   objects merge. Keep those semantics identical in `profile.ts` and the View patch builder.
 - No secrets — calendar iCal URLs, scheduler credentials, tokens — in the repo,
-  `profile.json`, logs, tool output, or error messages. Credentials belong in the OS
-  keychain behind `getSchedulerCredentials()`.
+  `profile.json` (beyond the redacted `calendar.icalUrls` fallback), logs, tool output, or
+  error messages. Scheduler credentials belong in the OS keychain behind
+  `resolveNeedleNineCredentials()` (`src/providers/needlenine/credentials.ts`).
 - Keep provider/site-specific code inside its adapter module under `src/providers/`; the
   server and planner see only the interfaces in `providers/types.ts`.
 - Tool errors are one-line, human-readable `isError: true` results (`errorResult`,
   `formatIssues`) — no stack dumps to the model.
 - ESM + `moduleResolution: NodeNext`: import TS modules with a `.js` extension
   (`./scoring.js`). zod is v4 (`z.iso.datetime`, `z.looseObject`, `.meta()`).
-
-## In-flight work (not on main)
-
-An iCal calendar provider (branch `calendar-ical`) and a NeedleNine/Playwright availability
-provider (branch `needlenine-availability`) are in progress on their own branches; do not
-document or depend on them from `main` until merged.
 
 ## Working from Anthropic's Claude Code remote sandbox
 

@@ -4,9 +4,11 @@
  */
 import { summarizeMetar, summarizeTaf, type AviationWeatherClient, type ConditionSummary, type TafSummary } from "./weather.js";
 import { scoreConditions, type ScoreResult, type TimeOfDay } from "./scoring.js";
+import { tagWindowsWithDaylight } from "./daylight.js";
 import { withForeflight, type RouteCandidateWithForeflight } from "./foreflight.js";
 import type { Profile } from "./profile.js";
 import type { Providers } from "./providers/types.js";
+import { addDays, compareLocalDates, parseLocalDate, zonedTimeToUtc } from "./tz.js";
 import type { AircraftAvailability, AircraftPerformance, DateRange, TimeWindow } from "./types.js";
 
 /** Generic light-single performance used when the profile has no usable aircraft. */
@@ -25,13 +27,15 @@ export interface PlanningDeps {
 }
 
 export interface PlanDayInput {
-  /** Local calendar date to plan, YYYY-MM-DD. */
+  /** Local calendar date to plan, YYYY-MM-DD (profile time zone). */
   date: string;
   timeOfDay?: TimeOfDay;
   /** Runway heading (degrees magnetic) for the crosswind check at home. */
   runwayHeadingDeg?: number;
   /** Ignore free windows shorter than this many hours (default 1.5). */
   minWindowHours?: number;
+  /** Notes to lead the plan with (e.g. how the calendar source was chosen). */
+  notes?: string[];
 }
 
 export interface PlannedWindow {
@@ -66,11 +70,18 @@ export interface DayPlan {
 export async function planDay(input: PlanDayInput, deps: PlanningDeps): Promise<DayPlan> {
   const { profile, providers, weather } = deps;
   const timeOfDay: TimeOfDay = input.timeOfDay ?? "day";
-  const notes: string[] = [];
+  const notes: string[] = [...(input.notes ?? [])];
 
-  const range = dayRange(input.date);
-  const windows = await providers.calendar.getFreeWindows(range, { minDurationHours: input.minWindowHours ?? 1.5 });
+  const range = dayRangeInZone(input.date, profile.preferences.timezone);
+  let windows: TimeWindow[] = [];
+  try {
+    windows = await providers.calendar.getFreeWindows(range, { minDurationHours: input.minWindowHours ?? 1.5 });
+  } catch (err) {
+    notes.push(`Calendar lookup failed (${providers.calendar.name}): ${(err as Error).message}`);
+  }
   if (windows.length === 0) notes.push(`No free windows on ${input.date} from ${providers.calendar.name}.`);
+  // Daylight is informational (day / night / mixed at the home airports); windows are never filtered by it.
+  windows = tagWindowsWithDaylight(windows, profile.homeAirports, profile.preferences.timezone);
 
   // Score current conditions at EVERY home airport (index 0 = primary field).
   const conditions = await Promise.all(
@@ -192,26 +203,22 @@ export function resolveAircraftPerformance(
   return { aircraft: GENERIC_AIRCRAFT, notes };
 }
 
-/** Local-midnight span covering startDate..endDate inclusive (both YYYY-MM-DD). */
-export function dateSpan(startDate: string, endDate: string): DateRange {
-  const parse = (d: string): Date => {
-    const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(d);
-    if (!m) throw new Error(`dates must be YYYY-MM-DD, got "${d}"`);
-    const [year, month, day] = [Number(m[1]), Number(m[2]), Number(m[3])];
-    const date = new Date(year, month - 1, day, 0, 0, 0, 0);
-    // Round-trip: `new Date` silently rolls impossible dates (2026-02-30 -> Mar 2), so reject them.
-    if (date.getFullYear() !== year || date.getMonth() !== month - 1 || date.getDate() !== day) {
-      throw new Error(`dates must be real calendar dates, got "${d}"`);
-    }
-    return date;
+/**
+ * Midnight-to-midnight span of startDate..endDate (inclusive, YYYY-MM-DD)
+ * where "midnight" is midnight in the given IANA time zone (the pilot's
+ * profile zone), independent of the machine's local zone.
+ */
+export function dateSpanInZone(startDate: string, endDate: string, timeZone: string): DateRange {
+  const start = parseLocalDate(startDate);
+  const end = parseLocalDate(endDate);
+  if (compareLocalDates(end, start) < 0) throw new Error(`endDate ${endDate} is before startDate ${startDate}`);
+  return {
+    start: zonedTimeToUtc(start, timeZone).toISOString(),
+    end: zonedTimeToUtc(addDays(end, 1), timeZone).toISOString(),
   };
-  const start = parse(startDate);
-  const end = parse(endDate);
-  end.setDate(end.getDate() + 1);
-  return { start: start.toISOString(), end: end.toISOString() };
 }
 
-/** Local-midnight-to-midnight range for a single YYYY-MM-DD date. */
-export function dayRange(date: string): DateRange {
-  return dateSpan(date, date);
+/** Zone-midnight range for a single YYYY-MM-DD date in the given IANA time zone. */
+export function dayRangeInZone(date: string, timeZone: string): DateRange {
+  return dateSpanInZone(date, date, timeZone);
 }

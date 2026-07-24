@@ -5,6 +5,24 @@
  */
 import { round2 } from "./util.js";
 
+/** Daylight classification of a window at the home airports (see src/daylight.ts). */
+export type DaylightTag = "day" | "night" | "mixed" | "unknown";
+
+/** Sun events at one airport for a local day (ISO timestamps with the profile-zone offset). */
+export interface AirportSunTimes {
+  airport: string;
+  /** Local date (YYYY-MM-DD, profile zone) the times refer to. */
+  date: string;
+  sunrise: string | null;
+  sunset: string | null;
+  /** Morning civil twilight begins (sun 6 degrees below the horizon). */
+  civilDawn: string | null;
+  /** Evening civil twilight ends. */
+  civilDusk: string | null;
+  /** True when the window ran past local midnight (times are for the start day). */
+  spansLocalMidnight?: boolean;
+}
+
 /** A contiguous block of time the pilot could fly. */
 export interface TimeWindow {
   /** ISO 8601 start timestamp. */
@@ -15,6 +33,12 @@ export interface TimeWindow {
   durationHours: number;
   /** Optional label, e.g. "morning slot" or the calendar gap description. */
   label?: string;
+  /** Daylight tag at the home airports (added by the daylight tagger). */
+  daylight?: DaylightTag;
+  /** Sun times per home airport used for the daylight tag. */
+  sun?: AirportSunTimes[];
+  /** Free-form notes (e.g. an unresolvable home airport). */
+  notes?: string[];
 }
 
 /** Inclusive-ish date/time range used to query calendars. */

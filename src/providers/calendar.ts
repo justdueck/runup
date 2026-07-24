@@ -1,11 +1,12 @@
 /**
- * Calendar providers.
+ * Fixture calendar provider (canned windows).
  *
- * TODO(GoogleCalendarProvider): real implementation should read the pilot's
- * Google Calendar via the freebusy API (OAuth desktop flow, token cached in
- * the OS keychain - never in profile.json) and subtract busy blocks from a
- * configurable "flyable hours" template. Until the calendar source is
- * chosen, FixtureCalendarProvider returns canned windows.
+ * The real calendar source is {@link ../providers/ical-calendar.ts | IcalCalendarProvider},
+ * which reads a private iCal (ICS) feed - e.g. a Google Calendar "secret
+ * address in iCal format" - configured via RUNUP_ICAL_URLS or the profile's
+ * calendar.icalUrls. This fixture provider is the fallback the server uses
+ * when no feed is configured (its output carries a note saying so) and is
+ * what the tests inject.
  */
 import { makeWindow, type DateRange, type TimeWindow } from "../types.js";
 import type { CalendarProvider } from "./types.js";

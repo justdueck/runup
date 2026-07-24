@@ -3,12 +3,12 @@ import {
   ceilingFromClouds,
   crosswindComponents,
   flightCategory,
-  NodeFetcher,
   parseFractionalNumber,
   parseVisibilitySm,
   summarizeMetar,
   summarizeTaf,
 } from "../src/weather.js";
+import { NodeFetcher } from "../src/http.js";
 import { fixtureWeatherClient } from "./helpers.js";
 
 describe("METAR condition summary helpers", () => {
