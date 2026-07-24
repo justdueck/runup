@@ -14,7 +14,8 @@ composes calendar / aircraft-availability / route providers into planning tools
 
 ## Commands
 
-- `npm install` — no lockfile is committed; keep it that way (see sandbox notes below).
+- `npm install` — `package-lock.json` is committed, with every `resolved` URL pointing at
+  public `registry.npmjs.org`; keep it that way (see sandbox notes below).
 - `npm run typecheck` — both projects, `--noEmit`: `tsconfig.json` (server, NodeNext,
   excludes `src/ui`) and `tsconfig.ui.json` (browser View, DOM lib).
 - `npm run build` — `tsc` to `dist/`, then `node scripts/build-ui.mjs` esbuild-bundles
@@ -30,9 +31,10 @@ composes calendar / aircraft-availability / route providers into planning tools
 
 - `src/index.ts` — stdio entry point; connects `createServer()` to `StdioServerTransport`.
   Never write to stdout — log with `console.error`.
-- `src/server.ts` — `createServer(deps)`: registers the 7 tools (`get_profile`,
+- `src/server.ts` — `createServer(deps)`: registers the 8 tools (`get_profile`,
   `update_profile`, `get_free_windows`, `get_conditions`, `get_aircraft_availability`,
-  `plan_routes`, `plan_day`) plus the `ui://runup/profile-form.html` App resource. Deps
+  `plan_routes`, `plan_day`, `export_foreflight`) plus the
+  `ui://runup/profile-form.html` App resource. Deps
   (profile path, providers, weather client, UI loader) are injectable so tests construct
   the server on fixtures. `jsonResult()` = text + `structuredContent`; `errorResult()` =
   `isError: true`.
@@ -50,6 +52,10 @@ composes calendar / aircraft-availability / route providers into planning tools
   (non-blocking) when no runway heading was supplied.
 - `src/planning.ts` — `planDay` composition (windows, availability, conditions at every
   home airport, routes), `resolveAircraftPerformance`, `dateSpan`/`dayRange`.
+- `src/foreflight.ts` — ForeFlight handoff: `foreflightmobile://` deep links and Garmin
+  `.fpl` generation. `RouteCandidate` stays vendor-free; candidates are decorated with
+  their `foreflight` block only at the tool-output boundary (`withForeflight` in the
+  `plan_routes` handler and inside `planDay`) — keep it that way for any new EFB target.
 - `src/providers/` — `CalendarProvider` / `AvailabilityProvider` / `RoutePlanner`
   interfaces (`types.ts`) with `FixtureCalendarProvider`, `FixtureAvailabilityProvider`,
   `NaiveRoutePlanner`; `NeedleNineProvider` is a documented stub that throws.
@@ -93,15 +99,17 @@ document or depend on them from `main` until merged.
 
 Environment-specific — none of this applies on the developer's Mac.
 
-- Public npmjs is blocked (403). Install through the sandbox's internal npm mirror (its
-  registry URL is provided in the session environment) with `--no-package-lock`, and never
-  commit a lockfile generated against it; if a lockfile is ever added, generate it against
-  public npmjs from a machine that can reach it.
+- npm may be routed through a sandbox mirror/proxy (in some sessions public npmjs is
+  blocked outright). The committed `package-lock.json` must keep every `resolved` URL on
+  public `registry.npmjs.org`: after any `npm install` that touches it, check
+  `git diff package-lock.json` (or grep the `resolved` hosts) before committing, and never
+  commit entries that point at an internal mirror.
 - aviationweather.gov and most external hosts are proxy-blocked, so live-API code is
   exercised only through fixtures; `get_conditions` returning `isError: true` ("fetch
   failed") and `plan_day` carrying a "Weather fetch failed" note is expected here.
 - Playwright's chromium is preinstalled at `/opt/pw-browsers` (for the in-flight
   availability-provider work) — never run `playwright install`.
-- This session can push branches but has no `gh`/GitHub API access to open PRs: push the
-  branch and hand the developer a compare link
+- GitHub access varies by session: some remote sessions have GitHub MCP tools (can open
+  PRs directly), others can only push. Without API access, push the branch and hand the
+  developer a compare link
   (`https://github.com/justdueck/runup/compare/main...<branch>`).
